@@ -49,25 +49,45 @@ type HTTP struct {
 	IdleTimeout       time.Duration
 }
 
+// Postgres — параметры пула соединений. Postgres здесь единственный источник
+// истины (docs/DESIGN.md §5), поэтому пул настраивается явно, а не дефолтами
+// драйвера: под нагрузкой упереться в лимит соединений базы дороже, чем
+// подождать в очереди за свободным соединением приложения.
+type Postgres struct {
+	DSN string
+	// MaxConns на сервис: суммарно по всем репликам должно оставаться меньше
+	// max_connections базы, иначе новый инстанс не поднимется.
+	MaxConns        int32
+	MinConns        int32
+	MaxConnLifetime time.Duration
+	MaxConnIdleTime time.Duration
+	// ConnectTimeout ограничивает установку соединения: без него старт сервиса
+	// с недоступной базой висит до таймаута ядра.
+	ConnectTimeout time.Duration
+}
+
 // KitchenAPI — конфигурация HTTP-сервиса (public + merchant контуры).
 type KitchenAPI struct {
 	App
-	HTTP HTTP
+	HTTP     HTTP
+	Postgres Postgres
 }
 
 // KitchenWorker — конфигурация воркера. Свой HTTP-сервер он поднимает только
 // ради healthcheck'ов: Temporal и Kafka появятся здесь на этапах 6–7.
 type KitchenWorker struct {
 	App
-	HTTP HTTP
+	HTTP     HTTP
+	Postgres Postgres
 }
 
 // LoadKitchenAPI читает конфигурацию kitchen-api.
 func LoadKitchenAPI() (KitchenAPI, error) {
 	l := &loader{}
 	cfg := KitchenAPI{
-		App:  l.app("kitchen-api"),
-		HTTP: l.http(":8080"),
+		App:      l.app("kitchen-api"),
+		HTTP:     l.http(":8080"),
+		Postgres: l.postgres(),
 	}
 
 	if err := l.err(); err != nil {
@@ -81,12 +101,39 @@ func LoadKitchenAPI() (KitchenAPI, error) {
 func LoadKitchenWorker() (KitchenWorker, error) {
 	l := &loader{}
 	cfg := KitchenWorker{
-		App:  l.app("kitchen-worker"),
-		HTTP: l.http(":8081"),
+		App:      l.app("kitchen-worker"),
+		HTTP:     l.http(":8081"),
+		Postgres: l.postgres(),
 	}
 
 	if err := l.err(); err != nil {
 		return KitchenWorker{}, fmt.Errorf("конфигурация kitchen-worker: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// Migrator — конфигурация одноразового мигратора. HTTP-сервера у него нет:
+// он накатывает миграции и завершается, compose ждёт его кода возврата.
+type Migrator struct {
+	App
+	Postgres Postgres
+	// Seed включает наполнение базы демо-данными сразу после миграций —
+	// так стенд из чистого клона поднимается уже с каталогом.
+	Seed bool
+}
+
+// LoadMigrator читает конфигурацию мигратора.
+func LoadMigrator() (Migrator, error) {
+	l := &loader{}
+	cfg := Migrator{
+		App:      l.app("migrator"),
+		Postgres: l.postgres(),
+		Seed:     l.boolean("MIGRATOR_SEED", false),
+	}
+
+	if err := l.err(); err != nil {
+		return Migrator{}, fmt.Errorf("конфигурация migrator: %w", err)
 	}
 
 	return cfg, nil
@@ -117,5 +164,18 @@ func (l *loader) http(defaultAddr string) HTTP {
 		ReadTimeout:       l.duration("HTTP_READ_TIMEOUT", 15*time.Second),
 		WriteTimeout:      l.duration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 		IdleTimeout:       l.duration("HTTP_IDLE_TIMEOUT", 60*time.Second),
+	}
+}
+
+func (l *loader) postgres() Postgres {
+	return Postgres{
+		// Дефолт указывает на порт стенда с хоста (docker-compose.yml),
+		// чтобы `go run ./cmd/...` работал без единой заданной переменной.
+		DSN:             l.str("POSTGRES_DSN", "postgres://kitchen:kitchen@localhost:55432/kitchen?sslmode=disable"),
+		MaxConns:        l.int32("POSTGRES_MAX_CONNS", 10),
+		MinConns:        l.int32("POSTGRES_MIN_CONNS", 2),
+		MaxConnLifetime: l.duration("POSTGRES_MAX_CONN_LIFETIME", time.Hour),
+		MaxConnIdleTime: l.duration("POSTGRES_MAX_CONN_IDLE_TIME", 30*time.Minute),
+		ConnectTimeout:  l.duration("POSTGRES_CONNECT_TIMEOUT", 5*time.Second),
 	}
 }

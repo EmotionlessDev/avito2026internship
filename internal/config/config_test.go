@@ -64,3 +64,46 @@ func TestLoadKitchenWorker_HasOwnPort(t *testing.T) {
 	assert.Equal(t, ":8081", cfg.HTTP.Addr, "воркер и api живут в одной сети compose")
 	assert.Equal(t, "kitchen-worker", cfg.ServiceName)
 }
+
+func TestLoadKitchenAPI_PostgresDefaults(t *testing.T) {
+	cfg, err := config.LoadKitchenAPI()
+	require.NoError(t, err)
+
+	assert.Contains(t, cfg.Postgres.DSN, "postgres://", "дефолт указывает на стенд с хоста")
+	assert.Positive(t, cfg.Postgres.MaxConns, "размер пула задаётся явно, а не дефолтом драйвера")
+	assert.Positive(t, cfg.Postgres.ConnectTimeout, "старт с недоступной базой не должен висеть")
+}
+
+func TestLoadMigrator_SeedIsOptIn(t *testing.T) {
+	cfg, err := config.LoadMigrator()
+	require.NoError(t, err)
+
+	assert.Equal(t, "migrator", cfg.ServiceName)
+	assert.False(t, cfg.Seed, "демо-данные — явное решение стенда, а не поведение по умолчанию")
+}
+
+func TestLoadMigrator_Overrides(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://u:p@db:5432/kitchen?sslmode=disable")
+	t.Setenv("POSTGRES_MAX_CONNS", "3")
+	t.Setenv("MIGRATOR_SEED", "true")
+
+	cfg, err := config.LoadMigrator()
+	require.NoError(t, err)
+
+	assert.Equal(t, "postgres://u:p@db:5432/kitchen?sslmode=disable", cfg.Postgres.DSN)
+	assert.Equal(t, int32(3), cfg.Postgres.MaxConns)
+	assert.True(t, cfg.Seed)
+}
+
+// Числовые и булевы переменные разбираются так же строго, как остальные:
+// POSTGRES_MAX_CONNS=много должно валить старт, а не превращаться в дефолт.
+func TestLoadMigrator_ReportsBadNumbersAndFlags(t *testing.T) {
+	t.Setenv("POSTGRES_MAX_CONNS", "много")
+	t.Setenv("MIGRATOR_SEED", "ага")
+
+	_, err := config.LoadMigrator()
+	require.Error(t, err)
+
+	assert.Contains(t, err.Error(), "POSTGRES_MAX_CONNS")
+	assert.Contains(t, err.Error(), "MIGRATOR_SEED")
+}

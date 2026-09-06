@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -74,6 +75,38 @@ func (l *loader) oneOf(key, def string, allowed ...string) string {
 
 func (l *loader) err() error {
 	return errors.Join(l.errs...)
+}
+
+func (l *loader) int32(key string, def int32) int32 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return def
+	}
+
+	v, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		l.fail(key, raw, err)
+
+		return def
+	}
+
+	return int32(v)
+}
+
+func (l *loader) boolean(key string, def bool) bool {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return def
+	}
+
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		l.fail(key, raw, err)
+
+		return def
+	}
+
+	return v
 }
 
 var errUnexpectedValue = errors.New("недопустимое значение")

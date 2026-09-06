@@ -14,6 +14,7 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/config"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
+	"github.com/emotionlessdev/avito-kitchen/internal/pg"
 )
 
 func main() {
@@ -38,8 +39,18 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	// Пул поднимается до сервера: сервис без базы отдавать каталог не может,
+	// и узнать об этом лучше на старте, а не на первом запросе.
+	pool, err := pg.NewPool(ctx, cfg.Postgres)
+	if err != nil {
+		return err
+	}
+
+	defer pool.Close()
+
 	health := httpx.NewHealth()
-	// Проверка Postgres регистрируется здесь на этапе 1, Temporal — на этапе 7.
+	health.Register("postgres", pg.HealthCheck(pool))
+	// Проверка Temporal регистрируется здесь на этапе 7.
 
 	router := httpx.NewRouter(log, health)
 

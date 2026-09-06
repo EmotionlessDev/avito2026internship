@@ -65,19 +65,36 @@ $(GOLANGCI_LINT):
 	@echo "устанавливаю golangci-lint $(GOLANGCI_LINT_VERSION) в $(LOCAL_BIN)"
 	@GOBIN=$(LOCAL_BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
+# --- База --------------------------------------------------------------------
+# Мигратор гоняется тем же образом, что и в стенде: одинаковый бинарь локально
+# и в compose исключает «у меня накатилось, а на стенде нет». Postgres compose
+# поднимает сам по depends_on.
+
+.PHONY: migrate
+migrate: ## Накатить миграции
+	docker compose run --rm --build migrator up
+
+.PHONY: migrate-down
+migrate-down: ## Откатить последнюю миграцию
+	docker compose run --rm --build migrator down
+
+.PHONY: migrate-reset
+migrate-reset: ## Откатить все миграции — проверка down-веток
+	docker compose run --rm --build migrator reset
+
+.PHONY: migrate-status
+migrate-status: ## Показать состояние миграций
+	docker compose run --rm --build migrator status
+
+.PHONY: seed
+seed: ## Наполнить базу демо-данными
+	docker compose run --rm --build migrator seed
+
 # --- Появляются на следующих этапах ------------------------------------------
 
 .PHONY: generate
 generate: ## Кодогенерация из OpenAPI (этап 2)
 	go generate ./...
-
-.PHONY: migrate
-migrate: ## Накатить миграции (этап 1)
-	@echo "migrate: появится на этапе 1 (goose + cmd/migrator)"
-
-.PHONY: seed
-seed: ## Наполнить базу демо-данными (этап 1)
-	@echo "seed: появится на этапе 1 (scripts/seed)"
 
 .PHONY: demo
 demo: ## Прогнать бизнес-сценарии (этап 9)
