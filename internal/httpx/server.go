@@ -84,6 +84,7 @@ func NewRouter(log *slog.Logger, health *Health) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(RequestID)
+	r.Use(RequestPath)
 	r.Use(AccessLog(log))
 	r.Use(Recover)
 

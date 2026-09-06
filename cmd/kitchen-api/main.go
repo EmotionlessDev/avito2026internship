@@ -11,10 +11,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/emotionlessdev/avito-kitchen/internal/api/publicapi"
+	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
 	"github.com/emotionlessdev/avito-kitchen/internal/config"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
 	"github.com/emotionlessdev/avito-kitchen/internal/pg"
+	"github.com/emotionlessdev/avito-kitchen/internal/search"
 )
 
 func main() {
@@ -53,6 +56,15 @@ func run() error {
 	// Проверка Temporal регистрируется здесь на этапе 7.
 
 	router := httpx.NewRouter(log, health)
+
+	// Каталог и поиск: поиск спрашивает у каталога, какие заведения открыты —
+	// расписание живёт там, а витрина search_items его не хранит.
+	catalogService := catalog.NewService(catalog.NewRepository(pool))
+	searchService := search.NewService(search.NewRepository(pool), catalogService)
+
+	if err := publicapi.Mount(router, publicapi.New(catalogService, searchService)); err != nil {
+		return err
+	}
 
 	log.InfoContext(ctx, "запускаю kitchen-api",
 		slog.String("env", cfg.Env),

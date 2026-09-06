@@ -53,6 +53,27 @@ func newRequestID() string {
 	return uuid.NewString()
 }
 
+type pathKey struct{}
+
+// RequestPath кладёт путь запроса в контекст.
+//
+// Нужен ошибкам: поле instance в problem+json обязано указывать на ресурс,
+// а хендлеры strict-сервера получают только контекст — самого запроса
+// у них уже нет.
+func RequestPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), pathKey{}, r.URL.Path)))
+	})
+}
+
+// PathFrom достаёт путь запроса из контекста; пустая строка — если middleware
+// не отработал.
+func PathFrom(ctx context.Context) string {
+	path, _ := ctx.Value(pathKey{}).(string)
+
+	return path
+}
+
 // AccessLog пишет одну строку на завершённый запрос. Строка одна намеренно:
 // пара «начало/конец» удваивает объём логов, не добавляя информации.
 func AccessLog(log *slog.Logger) func(http.Handler) http.Handler {
@@ -116,7 +137,7 @@ func Recover(next http.Handler) http.Handler {
 				slog.String("stack", string(debug.Stack())),
 			)
 
-			w.WriteHeader(http.StatusInternalServerError)
+			Internal(w, r)
 		}()
 
 		next.ServeHTTP(w, r)
