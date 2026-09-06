@@ -1,4 +1,4 @@
-package public
+package publicapi
 
 import (
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"

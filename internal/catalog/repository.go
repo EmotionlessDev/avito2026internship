@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,8 +42,8 @@ func (r *Repository) ListVenues(ctx context.Context, nameQuery string) ([]Venue,
 		SELECT`+venueColumns+`
 		FROM venues v
 		WHERE v.status = $1
-		  AND ($2 = '' OR v.name ILIKE '%' || $2 || '%')
-		ORDER BY v.name, v.id`, StatusActive, nameQuery)
+		  AND ($2 = '' OR v.name ILIKE '%' || $2 || '%' ESCAPE '\')
+		ORDER BY v.name, v.id`, StatusActive, escapeLike(nameQuery))
 	if err != nil {
 		return nil, fmt.Errorf("выборка заведений: %w", err)
 	}
@@ -83,6 +84,25 @@ func (r *Repository) GetVenue(ctx context.Context, id uuid.UUID) (Venue, error) 
 	}
 
 	return venues[0], nil
+}
+
+// ensureVenueExists проверяет, что заведение опубликовано. Чужое или скрытое
+// заведение неотличимо от несуществующего — снаружи это одна и та же ошибка.
+func (r *Repository) ensureVenueExists(ctx context.Context, id uuid.UUID) error {
+	var exists bool
+
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM venues WHERE id = $1 AND status = $2)`,
+		id, StatusActive).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("проверка заведения: %w", err)
+	}
+
+	if !exists {
+		return ErrVenueNotFound
+	}
+
+	return nil
 }
 
 // SchedulesByVenueIDs отдаёт расписания перечисленных заведений.
@@ -150,7 +170,9 @@ func (r *Repository) SchedulesByVenueIDs(ctx context.Context, ids []uuid.UUID) (
 // includeUnavailable оставляет в выдаче позиции из стоп-листа — витрине
 // полезно показать «сегодня закончилось», а не прятать блюдо совсем.
 func (r *Repository) GetMenu(ctx context.Context, venueID uuid.UUID, includeUnavailable bool) (Menu, error) {
-	if _, err := r.GetVenue(ctx, venueID); err != nil {
+	// Проверяем существование, а не читаем заведение целиком: меню не нужны
+	// ни расписание, ни координаты, а лишний запрос за расписанием — нужен.
+	if err := r.ensureVenueExists(ctx, venueID); err != nil {
 		return Menu{}, err
 	}
 
@@ -363,6 +385,15 @@ func collectVenues(rows pgx.Rows) ([]Venue, error) {
 	}
 
 	return venues, nil
+}
+
+// escapeLike обезвреживает шаблонные символы в пользовательском вводе:
+// без этого запрос «%» превращался бы в «покажи всё», а «_» — в «любая буква».
+// Поиск по названию должен искать подстроку, а не выполнять шаблон клиента.
+func escapeLike(s string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+
+	return replacer.Replace(s)
 }
 
 func parseInterval(weekday int, opens, closes string) (WorkInterval, error) {

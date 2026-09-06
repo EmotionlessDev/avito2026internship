@@ -59,6 +59,24 @@ func TestSortVenues(t *testing.T) {
 	})
 }
 
+// Пользовательский ввод не должен работать как шаблон LIKE: «%» ищет
+// подстроку «%», а не «всё подряд».
+func TestEscapeLike(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"хачапури":  "хачапури",
+		"%":         `\%`,
+		"_":         `\_`,
+		`\`:         `\\`,
+		"100% сыра": `100\% сыра`,
+	}
+
+	for in, want := range tests {
+		assert.Equal(t, want, escapeLike(in))
+	}
+}
+
 func names(views []VenueView) []string {
 	out := make([]string, 0, len(views))
 	for i := range views {

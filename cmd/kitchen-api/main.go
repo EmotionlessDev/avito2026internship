@@ -11,7 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	publicapi "github.com/emotionlessdev/avito-kitchen/internal/api/public"
+	"github.com/emotionlessdev/avito-kitchen/internal/api/publicapi"
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
 	"github.com/emotionlessdev/avito-kitchen/internal/config"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
@@ -62,7 +62,9 @@ func run() error {
 	catalogService := catalog.NewService(catalog.NewRepository(pool))
 	searchService := search.NewService(search.NewRepository(pool), catalogService)
 
-	publicapi.Mount(router, publicapi.New(catalogService, searchService))
+	if err := publicapi.Mount(router, publicapi.New(catalogService, searchService)); err != nil {
+		return err
+	}
 
 	log.InfoContext(ctx, "запускаю kitchen-api",
 		slog.String("env", cfg.Env),
