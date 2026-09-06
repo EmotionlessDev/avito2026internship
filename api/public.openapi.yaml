@@ -1,0 +1,1070 @@
+openapi: 3.0.3
+
+info:
+  title: Авито.Кухня — Public API
+  version: 1.0.0
+  description: |
+    Клиентский контур платформы: каталог заведений, сквозной поиск блюд, корзина
+    и заказы.
+
+    Ключевая ручка контура — `POST /cart/validate`. Она отвечает `200` со списком
+    проблем `issues[]`, а не ошибкой: пользователь должен узнать о трудности
+    **до** нажатия «Заказать», и каждая проблема несёт код, по которому клиент
+    рисует конкретное действие. Разбор — `docs/DESIGN.md` §2.
+
+    Аутентификации в MVP нет: идентификатор пользователя приходит в заголовке
+    `X-User-Id` (упрощение, `docs/DESIGN.md` §11). Хендлеры уже читают
+    пользователя из контекста, поэтому замена на JWT контракт не меняет.
+
+servers:
+  - url: /api/v1
+    description: Контур клиента
+
+security:
+  - UserId: []
+
+tags:
+  - name: catalog
+    description: Заведения и меню
+  - name: search
+    description: Сквозной поиск блюд
+  - name: cart
+    description: Корзина и её валидация
+  - name: orders
+    description: Оформление и жизненный цикл заказа
+
+paths:
+  /venues:
+    get:
+      tags: [catalog]
+      operationId: listVenues
+      summary: Каталог заведений
+      description: |
+        Список заведений с фильтрами. Координаты пользователя не обязательны:
+        без них не считается расстояние и недоступна сортировка `distance`.
+      parameters:
+        - $ref: '#/components/parameters/Lat'
+        - $ref: '#/components/parameters/Lon'
+        - name: q
+          in: query
+          description: Поиск по названию заведения
+          schema: { type: string, maxLength: 100 }
+          example: хачапури
+        - name: open_now
+          in: query
+          description: Только открытые сейчас — по расписанию в часовом поясе заведения
+          schema: { type: boolean, default: false }
+        - name: sort
+          in: query
+          description: |
+            `distance` требует `lat` и `lon`; без них запрос вернёт `400`.
+          schema:
+            type: string
+            enum: [distance, name]
+            default: name
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Страница каталога
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenueList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /venues/{venueId}:
+    get:
+      tags: [catalog]
+      operationId: getVenue
+      summary: Карточка заведения
+      parameters:
+        - $ref: '#/components/parameters/VenueId'
+      responses:
+        '200':
+          description: Заведение
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenueDetails' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /venues/{venueId}/menu:
+    get:
+      tags: [catalog]
+      operationId: getVenueMenu
+      summary: Меню заведения по категориям
+      parameters:
+        - $ref: '#/components/parameters/VenueId'
+        - name: include_unavailable
+          in: query
+          description: |
+            По умолчанию позиции в стоп-листе не показываются. С `true` они
+            приходят с `is_available: false` — так витрина может показать
+            «сегодня закончилось», а не спрятать блюдо совсем.
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Меню
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Menu' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /search:
+    get:
+      tags: [search]
+      operationId: searchItems
+      summary: Сквозной поиск блюд по всем заведениям
+      description: |
+        Пользователь ищет блюдо, а не заведение. Полнотекст с русским стеммингом,
+        при малом числе результатов — доп. поиск по триграммам, поэтому «хачапур»
+        находит «Хачапури по-аджарски» (сценарий U12).
+
+        Недоступные позиции не выбрасываются из выдачи, а опускаются вниз
+        с `is_available: false`.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Поисковый запрос
+          schema: { type: string, minLength: 2, maxLength: 100 }
+          example: хачапур
+        - $ref: '#/components/parameters/Lat'
+        - $ref: '#/components/parameters/Lon'
+        - name: only_available
+          in: query
+          description: Скрыть позиции, которых сейчас нет в наличии
+          schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Найденные блюда
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /cart:
+    get:
+      tags: [cart]
+      operationId: getCart
+      summary: Корзина с актуальными ценами
+      description: |
+        Корзина у пользователя одна и привязана к одному заведению
+        (`docs/DESIGN.md` §11). Пустая корзина — это `200` с `venue_id: null`,
+        а не `404`.
+      responses:
+        '200':
+          description: Корзина
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+    delete:
+      tags: [cart]
+      operationId: clearCart
+      summary: Очистить корзину
+      responses:
+        '204':
+          description: Корзина пуста
+
+  /cart/items:
+    post:
+      tags: [cart]
+      operationId: addCartItem
+      summary: Добавить позицию в корзину
+      description: |
+        Позиция из другого заведения не добавляется молча: запрос вернёт `409`
+        с кодом `CART_MIXED_VENUES`, и клиент спросит, очищать ли корзину
+        (сценарий U8).
+      requestBody:
+        required: true
+        description: Позиция, количество и выбранные модификаторы
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddCartItemRequest' }
+      responses:
+        '200':
+          description: Корзина после добавления
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Позиция из другого заведения
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                type: https://kitchen.avito.ru/errors/cart-mixed-venues
+                title: В корзине блюда другого заведения
+                status: 409
+                code: CART_MIXED_VENUES
+                detail: В корзине блюда из «Хачапури и вино» — очистить корзину?
+                instance: /api/v1/cart/items
+
+  /cart/items/{cartItemId}:
+    patch:
+      tags: [cart]
+      operationId: updateCartItem
+      summary: Изменить количество
+      parameters:
+        - $ref: '#/components/parameters/CartItemId'
+      requestBody:
+        required: true
+        description: Новое количество позиции
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateCartItemRequest' }
+      responses:
+        '200':
+          description: Корзина после изменения
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [cart]
+      operationId: deleteCartItem
+      summary: Удалить позицию
+      parameters:
+        - $ref: '#/components/parameters/CartItemId'
+      responses:
+        '200':
+          description: Корзина после удаления
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /cart/validate:
+    post:
+      tags: [cart]
+      operationId: validateCart
+      summary: Проверить корзину перед оформлением
+      description: |
+        Каскад проверок из `docs/DESIGN.md` §2. Ответ — **не ошибка**, а диагноз:
+        `200` со списком `issues[]`. `severity: blocking` гасит кнопку «Заказать»,
+        `confirmable` показывает диалог подтверждения и снимается флагом
+        `accept_price_changes` при оформлении.
+
+        Адрес доставки передавать не обязательно: без него не проверяются
+        зона доставки и стоимость доставки.
+      requestBody:
+        required: false
+        description: Адрес доставки, если он уже известен клиенту
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ValidateCartRequest' }
+      responses:
+        '200':
+          description: Результат проверки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CartValidation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /orders:
+    get:
+      tags: [orders]
+      operationId: listOrders
+      summary: История заказов пользователя
+      parameters:
+        - name: status
+          in: query
+          description: Фильтр по статусу; можно повторять параметр
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/OrderStatus' }
+          style: form
+          explode: true
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Страница истории
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderList' }
+    post:
+      tags: [orders]
+      operationId: createOrder
+      summary: Оформить заказ
+      description: |
+        Оформление идемпотентно по заголовку `Idempotency-Key`: повтор с тем же
+        ключом возвращает **тот же** заказ и `200` вместо `201`. Так двойной клик
+        и ретрай сети не создают второй заказ (`docs/DESIGN.md` §10).
+
+        Если валидация нашла блокирующую проблему, ответ — `422` с кодом
+        `CART_NOT_VALID` и тем же списком `issues[]`, что отдаёт `/cart/validate`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Уникальный ключ попытки оформления, генерирует клиент
+          schema: { type: string, minLength: 8, maxLength: 128 }
+          example: 7f1c6b62-6f4a-4a7f-9a2e-2a3f0c1d4e5b
+      requestBody:
+        required: true
+        description: Адрес, контакт и подтверждение изменившихся цен
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateOrderRequest' }
+      responses:
+        '201':
+          description: Заказ создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '200':
+          description: Повтор с тем же `Idempotency-Key` — тот же заказ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Ключ идемпотентности уже использован с другим телом запроса
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: Корзину нельзя оформить
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/CartNotValidProblem' }
+
+  /orders/{orderId}:
+    get:
+      tags: [orders]
+      operationId: getOrder
+      summary: Карточка заказа с таймлайном
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Заказ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /orders/{orderId}/cancel:
+    post:
+      tags: [orders]
+      operationId: cancelOrder
+      summary: Отменить заказ
+      description: |
+        Отмена разрешена, пока заведение не отдало заказ: после `ready` переход
+        запрещает машина состояний, и ответ будет `409` с кодом
+        `ORDER_NOT_CANCELLABLE` (сценарий U11).
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: false
+        description: Причина отмены
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelOrderRequest' }
+      responses:
+        '200':
+          description: Заказ отменён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Заказ уже нельзя отменить
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              example:
+                type: https://kitchen.avito.ru/errors/order-not-cancellable
+                title: Заказ уже нельзя отменить
+                status: 409
+                code: ORDER_NOT_CANCELLABLE
+                detail: Заказ в статусе ready — заведение уже приготовило блюда
+                instance: /api/v1/orders/01890000-0100-7000-8000-000000000001/cancel
+
+  /orders/{orderId}/events:
+    get:
+      tags: [orders]
+      operationId: streamOrderEvents
+      summary: Поток статусов заказа (SSE)
+      description: |
+        `text/event-stream`: сервер шлёт событие на каждый переход статуса.
+        В MVP поток наполняется опросом истории статусов внутри `kitchen-api`;
+        под нагрузкой заменяется на `LISTEN/NOTIFY` — контракт не меняется
+        (`docs/DESIGN.md` §8).
+
+        Тело каждого события — JSON схемы `OrderStatusEvent`.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Поток событий
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: status
+                  data: {"from_status":"placed","to_status":"accepted","actor_type":"venue","created_at":"2026-09-06T12:31:07Z"}
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    UserId:
+      type: apiKey
+      in: header
+      name: X-User-Id
+      description: |
+        Идентификатор пользователя вместо авторизации. В проде заменяется
+        на JWT Авито, `user_id` берётся из claims.
+
+  parameters:
+    VenueId:
+      description: Идентификатор заведения
+      name: venueId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderId:
+      description: Идентификатор заказа
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CartItemId:
+      description: Идентификатор позиции в корзине
+      name: cartItemId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Lat:
+      name: lat
+      in: query
+      description: Широта пользователя; вместе с `lon` включает расчёт расстояния
+      schema: { type: number, format: double, minimum: -90, maximum: 90 }
+      example: 55.7402
+    Lon:
+      name: lon
+      in: query
+      description: Долгота пользователя
+      schema: { type: number, format: double, minimum: -180, maximum: 180 }
+      example: 37.6280
+    Cursor:
+      name: cursor
+      in: query
+      description: Курсор следующей страницы из поля `next_cursor`
+      schema: { type: string, maxLength: 512 }
+    Limit:
+      description: Размер страницы
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Problem:
+      type: object
+      description: |
+        Ошибка по RFC 9457 (`application/problem+json`). Поле `code` —
+        расширение стандарта: машиночитаемый код, по которому клиент выбирает
+        текст и действие, не разбирая `detail`.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: https://kitchen.avito.ru/errors/venue-not-found
+        title:
+          type: string
+          example: Заведение не найдено
+        status:
+          type: integer
+          example: 404
+        code:
+          type: string
+          example: VENUE_NOT_FOUND
+        detail:
+          type: string
+        instance:
+          type: string
+          example: /api/v1/venues/01890000-0001-7000-8000-000000000009
+
+    CartNotValidProblem:
+      description: |
+        Оформление отклонено валидацией. Список проблем тот же, что
+        у `/cart/validate`, — клиенту не нужна вторая ветка разбора.
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          required: [issues]
+          properties:
+            issues:
+              type: array
+              items: { $ref: '#/components/schemas/CartIssue' }
+
+    MoneyMinor:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Сумма в копейках. Дробных денег в API нет — только целые копейки.
+      example: 52000
+
+    VenueSummary:
+      description: "Заведение в списке каталога: всё, что нужно карточке в выдаче"
+      type: object
+      required:
+        - id
+        - slug
+        - name
+        - address_text
+        - lat
+        - lon
+        - timezone
+        - is_open_now
+        - is_accepting_orders
+        - min_order_amount_minor
+        - delivery_fee_minor
+        - delivery_radius_m
+        - avg_prep_minutes
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string, example: hachapuri-i-vino }
+        name: { type: string, example: Хачапури и вино }
+        address_text: { type: string, example: 'Москва, Пятницкая улица, 25' }
+        lat: { type: number, format: double, example: 55.7402 }
+        lon: { type: number, format: double, example: 37.6280 }
+        timezone: { type: string, example: Europe/Moscow }
+        is_open_now:
+          type: boolean
+          description: Рассчитано по расписанию в часовом поясе заведения
+        next_open_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Когда откроется; заполнено, только если сейчас закрыто
+        is_accepting_orders:
+          type: boolean
+          description: '`false` — кухня поставила приём на паузу (сценарий M7)'
+        min_order_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_fee_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_radius_m: { type: integer, example: 5000 }
+        avg_prep_minutes: { type: integer, example: 30 }
+        distance_m:
+          type: integer
+          nullable: true
+          description: Расстояние от переданных координат; `null`, если координат не было
+          example: 1240
+
+    VenueDetails:
+      description: "Карточка заведения: то же, что в списке, плюс расписание работы"
+      allOf:
+        - $ref: '#/components/schemas/VenueSummary'
+        - type: object
+          required: [work_hours]
+          properties:
+            work_hours:
+              type: array
+              items: { $ref: '#/components/schemas/WorkHoursInterval' }
+
+    WorkHoursInterval:
+      description: Один интервал работы в конкретный день недели
+      type: object
+      required: [weekday, opens_at, closes_at]
+      properties:
+        weekday:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 — понедельник, 6 — воскресенье
+        opens_at:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          example: '10:00'
+        closes_at:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: Значение меньше или равное `opens_at` означает работу через полночь
+          example: '23:00'
+
+    VenueList:
+      description: Страница каталога заведений
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/VenueSummary' }
+        next_cursor:
+          type: string
+          nullable: true
+
+    Menu:
+      description: Меню заведения, сгруппированное по категориям
+      type: object
+      required: [venue_id, categories]
+      properties:
+        venue_id: { type: string, format: uuid }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/MenuCategory' }
+
+    MenuCategory:
+      description: Раздел меню с позициями в порядке показа
+      type: object
+      required: [id, external_id, name, position, items]
+      properties:
+        id: { type: string, format: uuid }
+        external_id:
+          type: string
+          description: Идентификатор в системе заведения
+          example: cat-hachapuri
+        name: { type: string, example: Хачапури }
+        position: { type: integer, example: 1 }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MenuItem' }
+
+    MenuItem:
+      description: Позиция меню с модификаторами и признаком доступности
+      type: object
+      required: [id, external_id, name, price_minor, is_available, option_groups]
+      properties:
+        id: { type: string, format: uuid }
+        external_id: { type: string, example: hv-001 }
+        name: { type: string, example: Хачапури по-аджарски }
+        description:
+          type: string
+          example: Лодочка из теста с сулугуни, яйцом и сливочным маслом
+        price_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        weight_grams:
+          type: integer
+          nullable: true
+          example: 450
+        is_available:
+          type: boolean
+          description: '`false` — позиция в стоп-листе заведения'
+        option_groups:
+          type: array
+          items: { $ref: '#/components/schemas/OptionGroup' }
+
+    OptionGroup:
+      description: "Группа модификаторов: сколько вариантов можно выбрать и какие"
+      type: object
+      required: [id, external_id, name, min_choices, max_choices, options]
+      properties:
+        id: { type: string, format: uuid }
+        external_id: { type: string, example: hv-001-extra }
+        name: { type: string, example: Добавки }
+        min_choices: { type: integer, example: 0 }
+        max_choices: { type: integer, example: 3 }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/Option' }
+
+    Option:
+      description: Один вариант модификатора и его надбавка к цене
+      type: object
+      required: [id, external_id, name, price_delta_minor, is_available]
+      properties:
+        id: { type: string, format: uuid }
+        external_id: { type: string, example: hv-001-extra-cheese }
+        name: { type: string, example: Двойной сыр }
+        price_delta_minor:
+          type: integer
+          format: int64
+          description: Надбавка к цене позиции; может быть отрицательной
+          example: 9000
+        is_available: { type: boolean }
+
+    SearchResult:
+      description: Страница выдачи сквозного поиска
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SearchItem' }
+        next_cursor:
+          type: string
+          nullable: true
+
+    SearchItem:
+      description: Найденное блюдо вместе с заведением, которое его готовит
+      type: object
+      required:
+        - item_id
+        - venue_id
+        - item_name
+        - venue_name
+        - category_name
+        - price_minor
+        - is_available
+        - venue_is_open_now
+      properties:
+        item_id: { type: string, format: uuid }
+        venue_id: { type: string, format: uuid }
+        item_name: { type: string, example: Хачапури по-аджарски }
+        venue_name: { type: string, example: Хачапури и вино }
+        category_name: { type: string, example: Хачапури }
+        price_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        is_available: { type: boolean }
+        venue_is_open_now: { type: boolean }
+        distance_m:
+          type: integer
+          nullable: true
+          example: 1240
+
+    Cart:
+      description: Корзина пользователя с пересчитанными на момент чтения ценами
+      type: object
+      required: [id, items, items_amount_minor]
+      properties:
+        id: { type: string, format: uuid }
+        venue_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: '`null` у пустой корзины: заведение появляется с первой позицией'
+        venue_name:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CartItem' }
+        items_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        updated_at: { type: string, format: date-time }
+
+    CartItem:
+      description: "Позиция корзины: количество, выбранные опции и текущая цена"
+      type: object
+      required: [id, menu_item_id, name, qty, unit_price_minor, total_minor, is_available, options]
+      properties:
+        id: { type: string, format: uuid }
+        menu_item_id: { type: string, format: uuid }
+        name: { type: string, example: Хачапури по-аджарски }
+        qty: { type: integer, minimum: 1, example: 2 }
+        unit_price_minor:
+          allOf: [{ $ref: '#/components/schemas/MoneyMinor' }]
+          description: Цена позиции с учётом выбранных опций, за одну штуку
+        total_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        is_available:
+          type: boolean
+          description: Проверяется при каждом чтении корзины — позиция могла уйти в стоп-лист
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/SelectedOption' }
+
+    SelectedOption:
+      description: Выбранный модификатор позиции
+      type: object
+      required: [option_id, name, price_delta_minor]
+      properties:
+        option_id: { type: string, format: uuid }
+        group_id: { type: string, format: uuid }
+        name: { type: string, example: Двойной сыр }
+        price_delta_minor: { type: integer, format: int64, example: 9000 }
+        is_available: { type: boolean }
+
+    AddCartItemRequest:
+      description: "Что добавить в корзину: позиция, количество и модификаторы"
+      type: object
+      required: [item_id, qty]
+      properties:
+        item_id: { type: string, format: uuid }
+        qty: { type: integer, minimum: 1, maximum: 99, default: 1 }
+        option_ids:
+          type: array
+          description: Выбранные модификаторы; состав проверяется по `min_choices`/`max_choices`
+          items: { type: string, format: uuid }
+
+    UpdateCartItemRequest:
+      description: Новое количество позиции в корзине
+      type: object
+      required: [qty]
+      properties:
+        qty:
+          type: integer
+          minimum: 1
+          maximum: 99
+          description: Ноль не принимается — для удаления есть `DELETE`
+
+    ValidateCartRequest:
+      description: Данные, которых нет в корзине, но которые нужны проверке
+      type: object
+      properties:
+        delivery:
+          $ref: '#/components/schemas/DeliveryPoint'
+
+    DeliveryPoint:
+      description: Адрес доставки с координатами — по ним считается зона и расстояние
+      type: object
+      required: [address, lat, lon]
+      properties:
+        address: { type: string, example: 'Москва, Большая Ордынка, 40' }
+        lat: { type: number, format: double, example: 55.7361 }
+        lon: { type: number, format: double, example: 37.6252 }
+
+    CartValidation:
+      type: object
+      description: |
+        Диагноз корзины, а не ошибка. Суммы посчитаны по актуальным ценам,
+        поэтому клиент показывает итог и список проблем из одного ответа.
+      required: [is_valid, items_amount_minor, total_amount_minor, issues]
+      properties:
+        is_valid:
+          type: boolean
+          description: '`false`, если есть хотя бы одна проблема с `severity: blocking`'
+        venue_id:
+          type: string
+          format: uuid
+          nullable: true
+        items_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_fee_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        total_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        issues:
+          type: array
+          items: { $ref: '#/components/schemas/CartIssue' }
+      example:
+        is_valid: false
+        venue_id: 01890000-0001-7000-8000-000000000001
+        items_amount_minor: 78000
+        delivery_fee_minor: 14900
+        total_amount_minor: 92900
+        issues:
+          - code: ITEM_UNAVAILABLE
+            severity: blocking
+            item_id: 01890000-0003-7000-8000-000000000104
+            item_name: Хинкали с бараниной
+            message: Закончились
+          - code: PRICE_CHANGED
+            severity: confirmable
+            item_id: 01890000-0003-7000-8000-000000000101
+            old_price_minor: 45000
+            new_price_minor: 52000
+          - code: MIN_ORDER_NOT_MET
+            severity: blocking
+            min_order_minor: 100000
+            missing_minor: 7100
+
+    CartIssue:
+      type: object
+      description: |
+        Одна проблема корзины. Набор заполненных полей зависит от `code`:
+        у `MIN_ORDER_NOT_MET` это `min_order_minor` и `missing_minor`,
+        у `PRICE_CHANGED` — старая и новая цена, у товарных проблем — позиция.
+      required: [code, severity]
+      properties:
+        code: { $ref: '#/components/schemas/CartIssueCode' }
+        severity: { $ref: '#/components/schemas/IssueSeverity' }
+        message:
+          type: string
+          description: Готовый текст для пользователя
+          example: Закончились
+        item_id: { type: string, format: uuid }
+        item_name: { type: string }
+        option_id: { type: string, format: uuid }
+        option_name: { type: string }
+        old_price_minor: { type: integer, format: int64 }
+        new_price_minor: { type: integer, format: int64 }
+        min_order_minor: { type: integer, format: int64 }
+        missing_minor:
+          type: integer
+          format: int64
+          description: Сколько не хватает до минимальной суммы заказа
+        next_open_at:
+          type: string
+          format: date-time
+          description: Когда заведение откроется — для `VENUE_CLOSED`
+        distance_m: { type: integer }
+        delivery_radius_m: { type: integer }
+
+    CartIssueCode:
+      type: string
+      description: |
+        Полный список кодов каскада валидации (`docs/DESIGN.md` §2). Каждый код —
+        отдельная ветка в коде и отдельный тест.
+      enum:
+        - ITEM_UNAVAILABLE
+        - OPTION_UNAVAILABLE
+        - PRICE_CHANGED
+        - VENUE_CLOSED
+        - VENUE_NOT_ACCEPTING
+        - OUT_OF_DELIVERY_ZONE
+        - MIN_ORDER_NOT_MET
+        - CART_MIXED_VENUES
+
+    IssueSeverity:
+      type: string
+      description: |
+        `blocking` гасит кнопку «Заказать»; `confirmable` показывает диалог
+        и снимается флагом `accept_price_changes` при оформлении.
+      enum: [blocking, confirmable]
+
+    OrderStatus:
+      type: string
+      description: |
+        Статус заказа. Значения совпадают с `CHECK` в миграции `0003_orders`
+        и с машиной состояний из `docs/DESIGN.md` §6.1.
+      enum:
+        - created
+        - payment_failed
+        - placed
+        - accepted
+        - cooking
+        - ready
+        - delivering
+        - completed
+        - rejected
+        - expired
+        - cancelled
+
+    ActorType:
+      type: string
+      description: Кто выполнил переход статуса
+      enum: [user, venue, system]
+
+    CreateOrderRequest:
+      description: "Данные оформления: куда везти, кому звонить и что подтверждено"
+      type: object
+      required: [delivery, contact_phone]
+      properties:
+        delivery: { $ref: '#/components/schemas/DeliveryPoint' }
+        contact_phone: { type: string, example: '+79990000001' }
+        comment:
+          type: string
+          maxLength: 500
+          example: Позвонить за 10 минут
+        accept_price_changes:
+          type: boolean
+          default: false
+          description: |
+            Снимает проблемы с `severity: confirmable`. Блокирующие проблемы
+            этим флагом не снимаются.
+
+    CancelOrderRequest:
+      description: Причина отмены заказа пользователем
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+          example: Передумал
+
+    Order:
+      description: Заказ пользователя вместе с составом и историей статусов
+      type: object
+      required:
+        - id
+        - number
+        - venue_id
+        - venue_name
+        - status
+        - items
+        - items_amount_minor
+        - delivery_fee_minor
+        - total_amount_minor
+        - delivery_address
+        - contact_phone
+        - created_at
+        - timeline
+      properties:
+        id: { type: string, format: uuid }
+        number:
+          type: string
+          description: Человекочитаемый номер для поддержки и повара
+          example: К-260906-0042
+        venue_id: { type: string, format: uuid }
+        venue_name: { type: string, example: Хачапури и вино }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderItem' }
+        items_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_fee_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        total_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_address: { type: string }
+        contact_phone: { type: string }
+        eta_minutes:
+          type: integer
+          nullable: true
+          description: Появляется, когда заведение приняло заказ
+          example: 35
+        cancel_reason:
+          type: string
+          nullable: true
+        created_at: { type: string, format: date-time }
+        placed_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        timeline:
+          type: array
+          description: История переходов — она же лента статусов в интерфейсе
+          items: { $ref: '#/components/schemas/OrderStatusEvent' }
+
+    OrderItem:
+      type: object
+      description: |
+        Снапшот состава на момент оформления: название и цена скопированы,
+        поэтому чек не меняется, даже если заведение подняло цену.
+      required: [id, menu_item_id, external_item_id, name, price_minor, qty, total_minor]
+      properties:
+        id: { type: string, format: uuid }
+        menu_item_id: { type: string, format: uuid }
+        external_item_id:
+          type: string
+          description: Артикул заведения — в этих идентификаторах заказ уходит в POS
+          example: hv-001
+        name: { type: string, example: Хачапури по-аджарски }
+        price_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        qty: { type: integer, example: 2 }
+        total_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/SelectedOption' }
+
+    OrderStatusEvent:
+      description: "Один переход статуса: кто, когда и почему изменил заказ"
+      type: object
+      required: [to_status, actor_type, created_at]
+      properties:
+        from_status:
+          allOf: [{ $ref: '#/components/schemas/OrderStatus' }]
+          nullable: true
+        to_status: { $ref: '#/components/schemas/OrderStatus' }
+        actor_type: { $ref: '#/components/schemas/ActorType' }
+        reason:
+          type: string
+          nullable: true
+        created_at: { type: string, format: date-time }
+
+    OrderList:
+      description: Страница истории заказов
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Order' }
+        next_cursor:
+          type: string
+          nullable: true

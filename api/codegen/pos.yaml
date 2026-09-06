@@ -1,0 +1,16 @@
+# Конфигурация oapi-codegen для вебхуков в заведение.
+#
+# Здесь роли зеркальные: сервер реализует merchant-pos, а клиентом выступает
+# платформа. Поэтому генерируем обе стороны из одного файла — контракт
+# у них общий, и разъехаться они не могут.
+# Путь output относителен каталога internal/gen: генерация запускается
+# директивой go:generate из него (см. internal/gen/generate.go).
+package: pos
+output: pos/pos.gen.go
+
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  client: true
+  embedded-spec: true

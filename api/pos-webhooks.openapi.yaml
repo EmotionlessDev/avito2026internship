@@ -1,0 +1,297 @@
+openapi: 3.0.3
+
+info:
+  title: Авито.Кухня — POS Webhooks
+  version: 1.0.0
+  description: |
+    Контракт, который реализует **заведение**, а не платформа. Платформа здесь —
+    клиент: она вызывает эти ручки, когда заказ появился или отменился.
+
+    Спецификация лежит отдельным файлом сознательно: у неё другой владелец
+    и другой темп изменений, чем у наших контуров, и держать её в одном файле
+    с Public API было бы вводящим в заблуждение (`docs/DESIGN.md` §8).
+
+    **Подпись.** Каждый вызов несёт три заголовка:
+
+    - `X-Kitchen-Event-Id` — идентификатор события, ключ дедупликации;
+    - `X-Kitchen-Timestamp` — момент отправки, окно валидности 5 минут;
+    - `X-Kitchen-Signature` — `sha256=<hex hmac(secret, timestamp + "." + body)>`.
+
+    Заведение обязано проверять подпись и окно времени: вместе они закрывают
+    replay-атаку (`docs/DESIGN.md` §10).
+
+    **Доставка — at-least-once.** Платформа повторяет вызов до пяти раз
+    с backoff, поэтому одно и то же событие может прийти дважды. Приёмник
+    обязан быть идемпотентным по `X-Kitchen-Event-Id` (а для заказа — ещё
+    и по `order.id`). Ответ `2xx` считается подтверждением; на `4xx`, кроме
+    `409`, платформа повторять не будет.
+
+    Если POS был недоступен и все попытки исчерпаны, заказ не теряется:
+    заведение заберёт его поллингом `GET /orders?status=placed`
+    из Merchant API (сценарий M6).
+
+servers:
+  - url: '{webhookBaseUrl}'
+    description: Адрес, который заведение зарегистрировало через `PUT /webhook`
+    variables:
+      webhookBaseUrl:
+        default: http://merchant-pos:8090/pos/webhooks
+        description: База вебхуков заведения
+
+security:
+  - WebhookSignature: []
+
+tags:
+  - name: webhooks
+    description: Платформа → заведение
+  - name: reconciliation
+    description: Сверка меню
+
+paths:
+  /orders:
+    post:
+      tags: [webhooks]
+      operationId: deliverOrder
+      summary: Новый заказ
+      description: |
+        Заказ приходит в артикулах заведения (`external_item_id`), поэтому POS
+        кладёт его в свою систему, ничего не зная про uuid платформы.
+
+        Ответ `202` означает «принял в обработку», а не «подтвердил заказ»:
+        подтверждение приходит отдельно — вызовом `POST /orders/{id}/accept`
+        Merchant API.
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        description: Новый заказ платформы
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderCreatedEvent' }
+      responses:
+        '202':
+          description: Заказ принят в обработку
+        '400':
+          description: Тело не разобрано; платформа не повторяет
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: Подпись не сошлась или устарел `X-Kitchen-Timestamp`
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            Событие уже обработано. Платформа считает это успехом
+            и не повторяет вызов.
+        '503':
+          description: POS временно недоступен — платформа повторит вызов
+
+  /orders/{orderId}/cancelled:
+    post:
+      tags: [webhooks]
+      operationId: deliverOrderCancelled
+      summary: Заказ отменён на стороне платформы
+      description: |
+        Приходит, когда заказ отменил пользователь или платформа сама
+        (истёк таймер подтверждения, не прошёл холд оплаты). Заведению нужно
+        снять заказ с производства.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - $ref: '#/components/parameters/EventId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        description: Уведомление об отмене заказа
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderCancelledEvent' }
+      responses:
+        '202':
+          description: Отмена принята
+        '401':
+          description: Подпись не сошлась
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: Заказ неизвестен заведению
+        '409':
+          description: Отмена этого события уже применена; повтор не нужен
+
+  /menu:
+    get:
+      tags: [reconciliation]
+      operationId: getPosMenu
+      summary: Меню заведения для сверки
+      description: |
+        Раз в сутки платформа сверяет свою витрину с этой ручкой
+        (`MenuReconciliationWorkflow`) и логирует расхождения. Это ответ
+        на вопрос «а что, если событие всё-таки потерялось»: периодическая
+        сверка дешевле, чем попытка построить exactly-once (`docs/DESIGN.md` §6.4).
+      responses:
+        '200':
+          description: Текущее меню заведения
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PosMenu' }
+        '401':
+          description: Подпись запроса меню не сошлась
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+components:
+  securitySchemes:
+    WebhookSignature:
+      type: apiKey
+      in: header
+      name: X-Kitchen-Signature
+      description: '`sha256=<hex hmac(secret, timestamp + "." + body)>`'
+
+  parameters:
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      description: Идентификатор заказа в платформе
+      schema: { type: string, format: uuid }
+    EventId:
+      name: X-Kitchen-Event-Id
+      in: header
+      required: true
+      description: "Ключ дедупликации: одно и то же событие может прийти дважды"
+      schema: { type: string, format: uuid }
+    Timestamp:
+      name: X-Kitchen-Timestamp
+      in: header
+      required: true
+      description: Момент отправки; вызовы старше 5 минут положено отклонять
+      schema: { type: string, format: date-time }
+    Signature:
+      description: Подпись тела запроса секретом заведения
+      name: X-Kitchen-Signature
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^sha256=[0-9a-f]{64}$'
+
+  schemas:
+    Problem:
+      type: object
+      description: Ошибка по RFC 9457
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string, example: INVALID_SIGNATURE }
+        detail: { type: string }
+        instance: { type: string }
+
+    MoneyMinor:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Сумма в копейках
+      example: 52000
+
+    OrderCreatedEvent:
+      description: Событие «появился новый заказ» вместе с самим заказом
+      type: object
+      required: [event_id, occurred_at, order]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: Дублирует `X-Kitchen-Event-Id` — чтобы событие было самодостаточным в логах
+        occurred_at: { type: string, format: date-time }
+        order: { $ref: '#/components/schemas/PosOrder' }
+
+    OrderCancelledEvent:
+      description: Событие «заказ отменён» с причиной и инициатором
+      type: object
+      required: [event_id, occurred_at, order_id, reason]
+      properties:
+        event_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        order_id: { type: string, format: uuid }
+        number: { type: string, example: К-260906-0042 }
+        reason:
+          type: string
+          example: Отменён пользователем
+        cancelled_by:
+          type: string
+          description: Кто инициировал отмену
+          enum: [user, system]
+
+    PosOrder:
+      description: Заказ в том виде, в каком его принимает система заведения
+      type: object
+      required: [id, number, created_at, items, total_amount_minor, delivery_address, contact_phone]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: К-260906-0042 }
+        created_at: { type: string, format: date-time }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PosOrderItem' }
+        items_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        total_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_address: { type: string, example: 'Москва, Большая Ордынка, 40' }
+        contact_phone: { type: string, example: '+79990000001' }
+        comment:
+          type: string
+          nullable: true
+          example: Позвонить за 10 минут
+
+    PosOrderItem:
+      description: Позиция заказа в артикулах заведения
+      type: object
+      required: [external_item_id, name, qty, price_minor, total_minor]
+      properties:
+        external_item_id:
+          type: string
+          description: Артикул заведения
+          example: hv-001
+        name: { type: string, example: Хачапури по-аджарски }
+        qty: { type: integer, example: 2 }
+        price_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        total_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/PosOrderOption' }
+
+    PosOrderOption:
+      description: Выбранный модификатор позиции
+      type: object
+      required: [external_option_id, name]
+      properties:
+        external_option_id: { type: string, example: hv-001-extra-cheese }
+        name: { type: string, example: Двойной сыр }
+        price_delta_minor: { type: integer, format: int64, example: 9000 }
+
+    PosMenu:
+      description: Меню заведения на момент запроса — для суточной сверки
+      type: object
+      required: [items]
+      properties:
+        generated_at: { type: string, format: date-time }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PosMenuItem' }
+
+    PosMenuItem:
+      description: "Позиция меню заведения: артикул, цена и наличие"
+      type: object
+      required: [external_id, name, price_minor, is_available]
+      properties:
+        external_id: { type: string, example: hv-001 }
+        name: { type: string, example: Хачапури по-аджарски }
+        price_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        is_available: { type: boolean }
