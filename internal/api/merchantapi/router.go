@@ -23,9 +23,11 @@ const BasePath = "/api/merchant/v1"
 
 // Mount навешивает контур заведений на роутер.
 //
-// Порядок middleware важен: сначала аутентификация — она кладёт заведение
-// в контекст, — и только потом валидация контракта и хендлеры. Запрос без
-// ключа не должен доходить до кода, который ожидает арендатора.
+// Порядок middleware важен и неочевиден: сгенерированный код оборачивает
+// хендлер списком по порядку, поэтому ПОСЛЕДНИЙ в списке оказывается
+// снаружи и выполняется первым. Аутентификация обязана быть снаружи:
+// запрос без ключа должен получить 401, а не подробности о том, чем
+// его тело не понравилось валидатору.
 func Mount(router chi.Router, handler *Handler, service *merchant.Service) error {
 	validator, err := requestValidator()
 	if err != nil {
@@ -41,8 +43,8 @@ func Mount(router chi.Router, handler *Handler, service *merchant.Service) error
 		BaseURL:    BasePath,
 		BaseRouter: router,
 		Middlewares: []gen.MiddlewareFunc{
-			Authenticator(service),
 			validator,
+			Authenticator(service),
 		},
 		ErrorHandlerFunc: requestError,
 	})

@@ -37,9 +37,13 @@ func Mount(router chi.Router, handler *Handler) error {
 	public.HandlerWithOptions(strict, public.ChiServerOptions{
 		BaseURL:    BasePath,
 		BaseRouter: router,
+		// Список оборачивает хендлер по порядку, поэтому последний элемент
+		// выполняется первым: разбор X-User-Id идёт до валидации контракта,
+		// как и в контуре заведений — сначала «кто спрашивает», потом
+		// «что именно спросили».
 		Middlewares: []public.MiddlewareFunc{
-			httpx.UserID,
 			validator,
+			httpx.UserID,
 		},
 		ErrorHandlerFunc: requestError,
 	})

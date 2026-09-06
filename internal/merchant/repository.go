@@ -320,6 +320,14 @@ func (r *Repository) ApplyImport(
 			return err
 		}
 
+		// Пустой план — только запись в аудит. Витрину не трогаем: иначе
+		// каждый повторный импорт переписывал бы все строки поиска ради
+		// одинакового результата. Расхождения витрины с меню чинит
+		// не импорт, а суточная сверка (docs/DESIGN.md §6.4).
+		if changes.IsEmpty() {
+			return nil
+		}
+
 		return refreshSearchItems(ctx, tx, venueID)
 	})
 }

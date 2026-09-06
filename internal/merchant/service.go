@@ -72,6 +72,12 @@ func (s *Service) ImportMenu(ctx context.Context, snapshot Snapshot) (ImportResu
 	importID := s.newID()
 
 	if lastHash == payloadHash {
+		// Важное следствие: стоп-лист, выставленный отдельной ручкой
+		// после импорта, повторный импорт того же снапшота не отменит —
+		// отпечаток не изменился, работы нет. Это осознанно: операционное
+		// состояние живёт своей жизнью, а разошедшиеся данные ловит
+		// суточная сверка меню (docs/DESIGN.md §6.4).
+		//
 		// Аудит пишем и для повтора: «заведение прислало то же самое»
 		// — тоже факт синхронизации, и по нему видно, что интеграция жива.
 		if applyErr := s.store.ApplyImport(ctx, importID, payloadHash, Changes{}); applyErr != nil {
