@@ -1,0 +1,17 @@
+# Конфигурация oapi-codegen для клиентского контура.
+#
+# strict-server: хендлер принимает разобранный запрос и возвращает типизированный
+# ответ — забыть код статуса или отдать не ту схему нельзя, это не компилируется.
+# client нужен e2e-тестам: они ходят в API тем же кодом, что и внешний клиент,
+# а значит проверяют контракт, а не свои представления о нём.
+# Путь output относителен каталога internal/gen: генерация запускается
+# директивой go:generate из него (см. internal/gen/generate.go).
+package: public
+output: public/public.gen.go
+
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  client: true
+  embedded-spec: true

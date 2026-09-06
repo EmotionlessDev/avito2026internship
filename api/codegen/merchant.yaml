@@ -1,0 +1,16 @@
+# Конфигурация oapi-codegen для контура заведений.
+#
+# Из одной спеки берём и сервер (его реализует платформа), и клиент:
+# клиентом пользуется merchant-pos — эмулятор заведения, которому запрещено
+# импортировать внутренние пакеты платформы (правило depguard в .golangci.yml).
+# Путь output относителен каталога internal/gen: генерация запускается
+# директивой go:generate из него (см. internal/gen/generate.go).
+package: merchant
+output: merchant/merchant.gen.go
+
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  client: true
+  embedded-spec: true

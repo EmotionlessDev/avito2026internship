@@ -1,0 +1,721 @@
+openapi: 3.0.3
+
+info:
+  title: Авито.Кухня — Merchant API
+  version: 1.0.0
+  description: |
+    Контур заведений: импорт меню, стоп-листы, работа с заказами и настройки.
+    Клиент этого контура — учётная система заведения (в репозитории её роль
+    играет `merchant-pos`).
+
+    Заведение оперирует **своими** идентификаторами: везде, где это возможно,
+    ключом служит `external_id` — артикул из 1С или iiko. Связь с данными
+    платформы держится на `UNIQUE (venue_id, external_id)`, поэтому заведению
+    не нужно знать про uuid платформы (`docs/DESIGN.md` §7.1).
+
+    Изоляция арендаторов: `venue_id` берётся из API-ключа и подставляется
+    в запросы на уровне репозитория. Чужой ресурс отвечает `404`, а не `403`:
+    существование чужого заказа — тоже информация.
+
+servers:
+  - url: /api/merchant/v1
+    description: Контур заведений
+
+security:
+  - ApiKey: []
+
+tags:
+  - name: menu
+    description: Импорт меню и стоп-листы
+  - name: orders
+    description: Лента заказов и переходы статусов
+  - name: venue
+    description: Настройки заведения и вебхук
+
+paths:
+  /menu/import:
+    post:
+      tags: [menu]
+      operationId: importMenu
+      summary: Импорт полного снапшота меню
+      description: |
+        Заведение присылает меню целиком, платформа считает diff:
+        новые позиции создаются, изменённые обновляются, исчезнувшие
+        архивируются (мягко — на них ссылаются исторические заказы).
+
+        Импорт идемпотентен по хэшу тела: повторная отправка того же снапшота
+        вернёт нули в счётчиках и `idempotent: true`, а не сделает вторую
+        порцию изменений.
+      requestBody:
+        required: true
+        description: Меню заведения целиком
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MenuSnapshot' }
+      responses:
+        '200':
+          description: Результат синхронизации
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MenuImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: Снапшот противоречив — например, позиция ссылается на несуществующую категорию
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /menu/availability:
+    post:
+      tags: [menu]
+      operationId: setAvailability
+      summary: Батч-переключение стоп-листа
+      description: |
+        Самая горячая ручка контура: повар снимает позицию за секунды, и она
+        должна так же быстро исчезнуть из выдачи поиска.
+
+        Поле `until` ставит блюдо на стоп до указанного момента — платформа
+        сама вернёт его в продажу durable-таймером (`StopListWorkflow`).
+        Без `until` позиция остаётся в стоп-листе до явного возврата.
+      requestBody:
+        required: true
+        description: Какие позиции и опции снять со стопа или вернуть в продажу
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AvailabilityRequest' }
+      responses:
+        '200':
+          description: Сколько позиций и опций переключено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailabilityResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /orders:
+    get:
+      tags: [orders]
+      operationId: listVenueOrders
+      summary: Лента заказов заведения
+      description: |
+        Экран повара и одновременно поллинг-фолбэк: если вебхук не дошёл,
+        POS забирает новые заказы отсюда (сценарий M6). Заказ, полученный
+        и вебхуком, и поллингом, не задваивается — POS дедуплицирует
+        по `id` заказа.
+      parameters:
+        - name: status
+          in: query
+          description: Фильтр по статусу; можно повторять параметр
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/OrderStatus' }
+          style: form
+          explode: true
+        - name: since
+          in: query
+          description: Только заказы, изменённые позже этого момента
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Страница ленты
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerchantOrderList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /orders/{orderId}:
+    get:
+      tags: [orders]
+      operationId: getVenueOrder
+      summary: Карточка заказа
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Заказ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerchantOrder' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /orders/{orderId}/accept:
+    post:
+      tags: [orders]
+      operationId: acceptOrder
+      summary: Принять заказ и назвать ETA
+      description: |
+        Сигнал в `OrderWorkflow`. Пока сигнал не пришёл, заказ ждёт в статусе
+        `placed`; через 7 минут молчания платформа отменяет заказ сама
+        и возвращает холд оплаты (сценарий U10).
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        description: Время готовности заказа
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AcceptOrderRequest' }
+      responses:
+        '200':
+          description: Заказ принят
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerchantOrder' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /orders/{orderId}/reject:
+    post:
+      tags: [orders]
+      operationId: rejectOrder
+      summary: Отклонить заказ
+      description: |
+        Платформа снимет холд оплаты и уведомит пользователя (сценарий M5).
+        Причина попадает в историю статусов и в уведомление.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        description: Причина отказа
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectOrderRequest' }
+      responses:
+        '200':
+          description: Заказ отклонён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerchantOrder' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /orders/{orderId}/ready:
+    post:
+      tags: [orders]
+      operationId: markOrderReady
+      summary: Заказ готов к выдаче
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Статус обновлён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerchantOrder' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /orders/{orderId}/delivered:
+    post:
+      tags: [orders]
+      operationId: markOrderDelivered
+      summary: Заказ доставлен
+      description: |
+        В MVP курьер замокан, поэтому доставку подтверждает заведение.
+        На этом шаге платформа списывает холд (`capture`).
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Заказ завершён, холд списан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerchantOrder' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /venue:
+    put:
+      tags: [venue]
+      operationId: updateVenueSettings
+      summary: Настройки заведения
+      description: |
+        Пауза приёма, минимальная сумма, радиус доставки, расписание.
+        Здесь же заведение ставит приём на паузу в час пик (сценарий M7):
+        карточка остаётся в каталоге, но помечена «не принимает заказы».
+      requestBody:
+        required: true
+        description: Новые настройки заведения
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VenueSettings' }
+      responses:
+        '200':
+          description: Настройки применены
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenueSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /webhook:
+    put:
+      tags: [venue]
+      operationId: registerWebhook
+      summary: Куда платформе слать заказы
+      description: |
+        Секрет используется для подписи `X-Kitchen-Signature` и обратно
+        не отдаётся. Контракт вебхуков — `pos-webhooks.openapi.yaml`.
+      requestBody:
+        required: true
+        description: Куда слать заказы и каким секретом их подписывать
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookRequest' }
+      responses:
+        '200':
+          description: Вебхук зарегистрирован
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /venue/stats:
+    get:
+      tags: [venue]
+      operationId: getVenueStats
+      summary: Витрина статистики заведения
+      description: |
+        Read-model, которую наполняет консьюмер `merchant-stats` из событий
+        Kafka (сценарий M8). Считается не по таблице заказов, поэтому тяжёлые
+        отчёты не мешают приёму заказов.
+      parameters:
+        - name: date
+          in: query
+          description: День в часовом поясе заведения; по умолчанию сегодня
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Статистика
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenueStats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    ApiKey:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer <api-key>`. Платформа хранит только sha256 ключа,
+        поиск идёт по префиксу.
+
+  parameters:
+    OrderId:
+      description: Идентификатор заказа в платформе
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      description: Курсор следующей страницы из поля `next_cursor`
+      schema: { type: string, maxLength: 512 }
+    Limit:
+      description: Размер страницы
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Ключ не передан, отозван или неизвестен
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: |
+        Ресурс не найден. Тот же ответ приходит на чужой ресурс: существование
+        чужого заказа — тоже информация, поэтому `404`, а не `403`.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    InvalidTransition:
+      description: Переход запрещён машиной состояний
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://kitchen.avito.ru/errors/invalid-order-transition
+            title: Недопустимый переход статуса
+            status: 409
+            code: INVALID_ORDER_TRANSITION
+            detail: Заказ в статусе cancelled — принять его нельзя
+            instance: /api/merchant/v1/orders/01890000-0100-7000-8000-000000000001/accept
+
+  schemas:
+    Problem:
+      type: object
+      description: Ошибка по RFC 9457; `code` — машиночитаемое расширение стандарта
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string, example: INVALID_ORDER_TRANSITION }
+        detail: { type: string }
+        instance: { type: string }
+
+    MoneyMinor:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Сумма в копейках
+      example: 52000
+
+    MenuSnapshot:
+      type: object
+      description: |
+        Меню целиком. Всё, чего нет в снапшоте, платформа считает исчезнувшим
+        и архивирует — частичные обновления в этой ручке не поддерживаются
+        намеренно: diff по полному состоянию не зависит от порядка запросов.
+      required: [categories, items]
+      properties:
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/SnapshotCategory' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SnapshotItem' }
+
+    SnapshotCategory:
+      description: Раздел меню в снапшоте заведения
+      type: object
+      required: [external_id, name]
+      properties:
+        external_id: { type: string, example: cat-hachapuri }
+        name: { type: string, example: Хачапури }
+        position: { type: integer, default: 0 }
+
+    SnapshotItem:
+      description: Позиция меню в снапшоте, в артикулах заведения
+      type: object
+      required: [external_id, category_external_id, name, price_minor]
+      properties:
+        external_id: { type: string, example: hv-001 }
+        category_external_id: { type: string, example: cat-hachapuri }
+        name: { type: string, example: Хачапури по-аджарски }
+        description: { type: string }
+        price_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        weight_grams: { type: integer, nullable: true }
+        position: { type: integer, default: 0 }
+        is_available:
+          type: boolean
+          default: true
+          description: Стоп-лист можно прислать сразу в снапшоте
+        option_groups:
+          type: array
+          items: { $ref: '#/components/schemas/SnapshotOptionGroup' }
+
+    SnapshotOptionGroup:
+      description: Группа модификаторов позиции в снапшоте
+      type: object
+      required: [external_id, name]
+      properties:
+        external_id: { type: string, example: hv-001-extra }
+        name: { type: string, example: Добавки }
+        min_choices: { type: integer, default: 0 }
+        max_choices: { type: integer, default: 1 }
+        position: { type: integer, default: 0 }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/SnapshotOption' }
+
+    SnapshotOption:
+      description: Вариант модификатора в снапшоте
+      type: object
+      required: [external_id, name]
+      properties:
+        external_id: { type: string, example: hv-001-extra-cheese }
+        name: { type: string, example: Двойной сыр }
+        price_delta_minor:
+          type: integer
+          format: int64
+          default: 0
+          description: Может быть отрицательной — «без сыра, минус 50 ₽» тоже модификатор
+        position: { type: integer, default: 0 }
+        is_available: { type: boolean, default: true }
+
+    MenuImportResult:
+      description: "Что изменил импорт: счётчики diff и признак идемпотентного повтора"
+      type: object
+      required: [import_id, created, updated, archived, idempotent]
+      properties:
+        import_id: { type: string, format: uuid }
+        created: { type: integer, example: 24 }
+        updated: { type: integer, example: 0 }
+        archived: { type: integer, example: 0 }
+        idempotent:
+          type: boolean
+          description: '`true` — снапшот совпал с предыдущим, изменений не было'
+        payload_hash:
+          type: string
+          description: Хэш снапшота, по которому считается идемпотентность
+          example: 9f2c1a7e5b3d4f60
+
+    AvailabilityRequest:
+      type: object
+      description: Хотя бы один из списков должен быть непустым
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AvailabilityChange' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/AvailabilityChange' }
+      example:
+        items:
+          - external_id: hv-004
+            is_available: false
+            until: '2026-09-06T20:59:59Z'
+        options:
+          - external_id: hv-001-extra-cheese
+            is_available: false
+
+    AvailabilityChange:
+      description: Переключение доступности одной позиции или одной опции
+      type: object
+      required: [external_id, is_available]
+      properties:
+        external_id: { type: string, example: hv-004 }
+        is_available: { type: boolean }
+        until:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Момент авто-возврата в продажу. Осмысленно только вместе
+            с `is_available: false`.
+
+    AvailabilityResult:
+      description: Сколько записей переключено и какие артикулы не нашлись
+      type: object
+      required: [items_updated, options_updated]
+      properties:
+        items_updated: { type: integer, example: 1 }
+        options_updated: { type: integer, example: 1 }
+        not_found:
+          type: array
+          description: Артикулы, которых нет в меню заведения
+          items: { type: string }
+
+    OrderStatus:
+      type: string
+      description: Значения совпадают с `CHECK` в миграции `0003_orders`
+      enum:
+        - created
+        - payment_failed
+        - placed
+        - accepted
+        - cooking
+        - ready
+        - delivering
+        - completed
+        - rejected
+        - expired
+        - cancelled
+
+    MerchantOrder:
+      type: object
+      description: |
+        Заказ глазами заведения: состав в его собственных артикулах, без данных
+        о платеже пользователя.
+      required:
+        - id
+        - number
+        - status
+        - items
+        - items_amount_minor
+        - total_amount_minor
+        - delivery_address
+        - contact_phone
+        - created_at
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: К-260906-0042 }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MerchantOrderItem' }
+        items_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_fee_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        total_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_address: { type: string }
+        contact_phone: { type: string }
+        comment:
+          type: string
+          nullable: true
+        eta_minutes:
+          type: integer
+          nullable: true
+        cancel_reason:
+          type: string
+          nullable: true
+        created_at: { type: string, format: date-time }
+        placed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    MerchantOrderItem:
+      description: Позиция заказа в артикулах заведения
+      type: object
+      required: [external_item_id, name, price_minor, qty, total_minor]
+      properties:
+        external_item_id:
+          type: string
+          description: Артикул заведения — заказ приходит в его идентификаторах
+          example: hv-001
+        name: { type: string, example: Хачапури по-аджарски }
+        price_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        qty: { type: integer, example: 2 }
+        total_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/MerchantOrderOption' }
+
+    MerchantOrderOption:
+      description: Выбранный модификатор позиции заказа
+      type: object
+      required: [external_option_id, name]
+      properties:
+        external_option_id: { type: string, example: hv-001-extra-cheese }
+        name: { type: string, example: Двойной сыр }
+        price_delta_minor: { type: integer, format: int64, example: 9000 }
+
+    MerchantOrderList:
+      description: Страница ленты заказов заведения
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MerchantOrder' }
+        next_cursor:
+          type: string
+          nullable: true
+
+    AcceptOrderRequest:
+      description: Подтверждение заказа с обещанным временем готовности
+      type: object
+      required: [eta_minutes]
+      properties:
+        eta_minutes:
+          type: integer
+          minimum: 1
+          maximum: 240
+          description: Через сколько минут заказ будет готов к выдаче
+          example: 35
+
+    RejectOrderRequest:
+      description: Отказ от заказа с причиной для пользователя
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+          example: Закончились продукты
+
+    VenueSettings:
+      description: Операционные настройки заведения; переданные поля заменяют текущие
+      type: object
+      properties:
+        is_accepting_orders:
+          type: boolean
+          description: '`false` — пауза приёма (сценарий M7)'
+        min_order_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_fee_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        delivery_radius_m: { type: integer, minimum: 1, example: 5000 }
+        avg_prep_minutes: { type: integer, minimum: 1, example: 30 }
+        timezone: { type: string, example: Europe/Moscow }
+        work_hours:
+          type: array
+          description: Расписание целиком; переданный список заменяет прежний
+          items: { $ref: '#/components/schemas/WorkHoursInterval' }
+
+    WorkHoursInterval:
+      description: Один интервал работы в конкретный день недели
+      type: object
+      required: [weekday, opens_at, closes_at]
+      properties:
+        weekday:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 — понедельник, 6 — воскресенье
+        opens_at:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          example: '10:00'
+        closes_at:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: Значение меньше или равное `opens_at` означает работу через полночь
+          example: '23:00'
+
+    WebhookRequest:
+      description: Адрес вебхука и секрет подписи
+      type: object
+      required: [url, secret]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: http://merchant-pos:8090/pos/webhooks/orders
+        secret:
+          type: string
+          minLength: 16
+          maxLength: 128
+          description: Секрет подписи HMAC-SHA256; обратно не отдаётся
+
+    WebhookSettings:
+      description: Зарегистрированный вебхук; секрет обратно не отдаётся
+      type: object
+      required: [url, is_active]
+      properties:
+        url: { type: string, format: uri }
+        is_active: { type: boolean }
+        updated_at: { type: string, format: date-time }
+
+    VenueStats:
+      description: Витрина статистики заведения за день
+      type: object
+      required: [date, orders_total, orders_completed, orders_rejected, revenue_minor]
+      properties:
+        date: { type: string, format: date }
+        orders_total: { type: integer, example: 42 }
+        orders_completed: { type: integer, example: 38 }
+        orders_rejected: { type: integer, example: 3 }
+        orders_expired:
+          type: integer
+          description: Заказы, на которые заведение не ответило за 7 минут
+          example: 1
+        revenue_minor:
+          allOf: [{ $ref: '#/components/schemas/MoneyMinor' }]
+          description: Выручка по завершённым заказам
+        avg_accept_seconds:
+          type: integer
+          nullable: true
+          description: Среднее время до подтверждения заказа
+          example: 46

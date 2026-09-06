@@ -65,6 +65,22 @@ $(GOLANGCI_LINT):
 	@echo "устанавливаю golangci-lint $(GOLANGCI_LINT_VERSION) в $(LOCAL_BIN)"
 	@GOBIN=$(LOCAL_BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
+# --- Контракты ---------------------------------------------------------------
+# Версия oapi-codegen пиньнется директивой tool в go.mod, версия vacuum —
+# тегом образа: обе одинаковы у всех, кто трогает контракты.
+
+VACUUM_VERSION := v0.30.3
+VACUUM := docker run --rm -v $(CURDIR):/work -w /work dshanley/vacuum:$(VACUUM_VERSION)
+
+.PHONY: generate
+generate: ## Кодогенерация из OpenAPI (результат коммитится)
+	go generate ./...
+
+.PHONY: lint-api
+lint-api: ## Линтер OpenAPI-спек (vacuum, конфиг — api/vacuum-ruleset.yaml)
+	$(VACUUM) lint -r api/vacuum-ruleset.yaml -d --fail-severity info \
+		api/public.openapi.yaml api/merchant.openapi.yaml api/pos-webhooks.openapi.yaml
+
 # --- База --------------------------------------------------------------------
 # Мигратор гоняется тем же образом, что и в стенде: одинаковый бинарь локально
 # и в compose исключает «у меня накатилось, а на стенде нет». Postgres compose
@@ -89,12 +105,6 @@ migrate-status: ## Показать состояние миграций
 .PHONY: seed
 seed: ## Наполнить базу демо-данными
 	docker compose run --rm --build migrator seed
-
-# --- Появляются на следующих этапах ------------------------------------------
-
-.PHONY: generate
-generate: ## Кодогенерация из OpenAPI (этап 2)
-	go generate ./...
 
 .PHONY: demo
 demo: ## Прогнать бизнес-сценарии (этап 9)

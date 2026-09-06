@@ -44,9 +44,33 @@ make seed            # демо-каталог: 3 заведения, 26 поз�
 | `kitchen-api` | 8080 | Public + Merchant API, `/healthz`, `/readyz` |
 | `kitchen-worker` | 8081 | Temporal worker, Kafka-консьюмеры, outbox-relay (этапы 6–7) |
 | `merchant-pos` | 8090 | Пример заведения — отдельная система со своим хранилищем |
+| Swagger UI | 8085 | Три OpenAPI-контракта в одном селекторе |
 | Temporal UI | 8233 | История workflow'ов заказа |
 | Postgres | 55432 | Не 5432: локальная СУБД на дефолтном порту есть почти у всех |
 | Kafka | 9094 | Внешний listener для консольных утилит |
+
+## Контракты
+
+Три спецификации, потому что это три разных контракта с разными владельцами:
+
+| Файл | Реализует | Клиент | Аутентификация |
+|---|---|---|---|
+| [api/public.openapi.yaml](api/public.openapi.yaml) | платформа | веб-клиент | `X-User-Id` (заглушка вместо JWT) |
+| [api/merchant.openapi.yaml](api/merchant.openapi.yaml) | платформа | учётная система заведения | `Authorization: Bearer <api-key>` |
+| [api/pos-webhooks.openapi.yaml](api/pos-webhooks.openapi.yaml) | **заведение** | платформа | HMAC-подпись `X-Kitchen-Signature` |
+
+Разработка идёт contract-first: сначала YAML, потом `make generate`, потом код.
+Сгенерированное лежит в `internal/gen/` и коммитится — сборка не требует тулинга.
+Руками эти файлы не правятся.
+
+```bash
+make generate   # oapi-codegen: типы, chi-сервер и клиент для каждой спеки
+make lint-api   # vacuum: линтер спек, правила — api/vacuum-ruleset.yaml
+```
+
+Тест `internal/gen` сравнивает набор операций в YAML с копией спеки внутри
+сгенерированного кода, поэтому забытый `make generate` роняет `make test`,
+а не всплывает в рантайме.
 
 ## Демо-данные
 
@@ -64,5 +88,6 @@ make seed            # демо-каталог: 3 заведения, 26 поз�
 
 Готово по этапам: **0** — каркас, конфигурация, логирование, graceful shutdown,
 пробы, Docker Compose, линтер; **1** — схема БД (19 таблиц), миграции goose
-с up- и down-ветками, мигратор, демо-данные. Дальше — OpenAPI и кодогенерация
-(этап 2), `scripts/demo.sh` с прогоном всех бизнес-сценариев (этап 9).
+с up- и down-ветками, мигратор, демо-данные; **2** — три OpenAPI-контракта,
+кодогенерация, Swagger UI. Дальше — каталог и поиск (этап 3), `scripts/demo.sh`
+с прогоном всех бизнес-сценариев (этап 9).

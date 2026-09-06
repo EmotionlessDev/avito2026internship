@@ -134,6 +134,31 @@ services:
       retries: 6
       start_period: 10s
 
+  # Витрина контрактов: три спеки из api/ отдаются как есть, без сборки.
+  # Каталог смонтирован томом, поэтому правка YAML видна после перезагрузки
+  # страницы — пересобирать образ не нужно.
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.29.0
+    restart: unless-stopped
+    environment:
+      URLS: >-
+        [{"url":"/specs/public.openapi.yaml","name":"Public API"},
+         {"url":"/specs/merchant.openapi.yaml","name":"Merchant API"},
+         {"url":"/specs/pos-webhooks.openapi.yaml","name":"POS Webhooks (реализует заведение)"}]
+      URLS_PRIMARY_NAME: Public API
+    volumes:
+      - ./api:/usr/share/nginx/html/specs:ro
+    ports:
+      - "${SWAGGER_UI_PORT:-8085}:8080"
+    healthcheck:
+      # 127.0.0.1, а не localhost: nginx в этом образе слушает только IPv4,
+      # а busybox-wget сначала пробует ::1 и получает connection refused.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
   # Одноразовый сервис: накатывает схему и завершается. Остальные сервисы
   # ждут его успешного кода возврата, поэтому мигрировать на старте API
   # не нужно — иначе несколько реплик полезли бы в схему одновременно.
