@@ -11,11 +11,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/emotionlessdev/avito-kitchen/internal/api/merchantapi"
 	"github.com/emotionlessdev/avito-kitchen/internal/api/publicapi"
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
 	"github.com/emotionlessdev/avito-kitchen/internal/config"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
+	"github.com/emotionlessdev/avito-kitchen/internal/merchant"
 	"github.com/emotionlessdev/avito-kitchen/internal/pg"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
 )
@@ -63,6 +65,17 @@ func run() error {
 	searchService := search.NewService(search.NewRepository(pool), catalogService)
 
 	if err := publicapi.Mount(router, publicapi.New(catalogService, searchService)); err != nil {
+		return err
+	}
+
+	// Планировщик стоп-листа пока отказывает: durable-таймеры появятся
+	// вместе с Temporal на этапе 7, и тогда здесь поменяется одна строка.
+	merchantService := merchant.NewService(
+		merchant.NewRepository(pool),
+		merchant.UnsupportedScheduler{},
+	)
+
+	if err := merchantapi.Mount(router, merchantapi.New(merchantService), merchantService); err != nil {
 		return err
 	}
 
