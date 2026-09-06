@@ -9,6 +9,21 @@
 
 name: avito-kitchen
 
+# Общие куски конфигурации вынесены в якоря. Они объявлены до сервисов
+# намеренно: YAML требует, чтобы якорь был определён раньше первой ссылки,
+# а порядок сервисов в файле должен читаться от инфраструктуры к приложению.
+x-go-build: &go-build
+  context: .
+  dockerfile: build/Dockerfile
+
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-dev}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  LOG_FORMAT: ${LOG_FORMAT:-text}
+  # Внутри сети compose база всегда на postgres:5432 — проброшенный
+  # на хост порт здесь ни при чём.
+  POSTGRES_DSN: postgres://${POSTGRES_USER:-kitchen}:${POSTGRES_PASSWORD:-kitchen}@postgres:5432/${POSTGRES_DB:-kitchen}?sslmode=disable
+
 services:
   postgres:
     image: postgres:16.15-alpine
@@ -17,9 +32,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-kitchen}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kitchen}
       POSTGRES_DB: ${POSTGRES_DB:-kitchen}
-      # Инициализация с C-локалью и явной кодировкой: сортировка не должна
-      # зависеть от локали хоста, иначе индексы ведут себя по-разному у разных людей.
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      # C.UTF-8, а не C: сортировка по-прежнему не зависит от локали хоста
+      # (порядок кодовых точек), но классификация символов знает про Юникод.
+      # С голой C-локалью lower('Хачапури') возвращает строку без изменений,
+      # а значит russian-стеммер и pg_trgm не находят кириллицу — поиск (§9)
+      # молча перестаёт работать.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
     ports:
       # 55432, а не 5432: локальный Postgres на дефолтном порту есть почти
       # у каждого, и стенд не должен падать на коллизии при первом запуске.
@@ -116,20 +134,37 @@ services:
       retries: 6
       start_period: 10s
 
+  # Одноразовый сервис: накатывает схему и завершается. Остальные сервисы
+  # ждут его успешного кода возврата, поэтому мигрировать на старте API
+  # не нужно — иначе несколько реплик полезли бы в схему одновременно.
+  migrator:
+    build:
+      <<: *go-build
+      args:
+        SERVICE: migrator
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      # Демо-данные прямо в стенде: `docker compose up` должен давать
+      # работающий каталог, а не пустую базу (сценарии demo.sh).
+      MIGRATOR_SEED: ${MIGRATOR_SEED:-true}
+    command: ["up"]
+
   kitchen-api:
-    build: &go-build
-      context: .
-      dockerfile: build/Dockerfile
+    build:
+      <<: *go-build
       args:
         SERVICE: kitchen-api
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-    environment: &app-env
-      APP_ENV: ${APP_ENV:-dev}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_FORMAT: ${LOG_FORMAT:-text}
+      migrator:
+        condition: service_completed_successfully
+    environment: *app-env
     ports:
       - "${KITCHEN_API_PORT:-8080}:8080"
     healthcheck:
@@ -151,6 +186,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       temporal:

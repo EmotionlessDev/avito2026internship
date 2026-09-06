@@ -522,13 +522,16 @@ erDiagram
         bigint delivery_fee_minor
         int delivery_radius_m
         int avg_prep_minutes
+        timestamptz created_at
         timestamptz updated_at
     }
     VENUE_API_KEYS {
         uuid id PK
         uuid venue_id FK
+        text name "подпись ключа: demo, prod"
         text key_prefix "для поиска"
         text key_hash "sha256, не сам ключ"
+        timestamptz created_at
         timestamptz revoked_at
     }
     VENUE_WORK_HOURS {
@@ -543,6 +546,8 @@ erDiagram
         text url
         text secret "для HMAC"
         bool is_active
+        timestamptz created_at
+        timestamptz updated_at
     }
     MENU_CATEGORIES {
         uuid id PK
@@ -550,6 +555,8 @@ erDiagram
         text external_id "ID в системе заведения"
         text name
         int position
+        timestamptz created_at
+        timestamptz updated_at
     }
     MENU_ITEMS {
         uuid id PK
@@ -563,6 +570,7 @@ erDiagram
         int position "порядок в категории"
         bool is_available "стоп-лист"
         bool is_archived "исчезло из меню"
+        timestamptz created_at
         timestamptz updated_at
     }
     MENU_OPTION_GROUPS {
@@ -572,14 +580,20 @@ erDiagram
         text name "Размер, Добавки"
         int min_choices
         int max_choices
+        int position "порядок показа"
+        timestamptz created_at
+        timestamptz updated_at
     }
     MENU_OPTIONS {
         uuid id PK
         uuid group_id FK
         text external_id
         text name
-        bigint price_delta_minor
+        bigint price_delta_minor "может быть отрицательной"
+        int position
         bool is_available
+        timestamptz created_at
+        timestamptz updated_at
     }
     MENU_IMPORTS {
         uuid id PK
@@ -588,6 +602,7 @@ erDiagram
         int items_created
         int items_updated
         int items_archived
+        timestamptz started_at
         timestamptz finished_at
     }
 ```
@@ -618,13 +633,15 @@ erDiagram
 
     USERS {
         uuid id PK
-        text phone
+        text phone UK
         text name
+        timestamptz created_at
     }
     CARTS {
         uuid id PK
         uuid user_id FK "UK: одна корзина"
-        uuid venue_id FK "корзина = одно заведение"
+        uuid venue_id FK "корзина = одно заведение, NULL у пустой"
+        timestamptz created_at
         timestamptz updated_at
     }
     CART_ITEMS {
@@ -634,6 +651,8 @@ erDiagram
         int qty
         jsonb options "выбранные модификаторы"
         bigint added_price_minor "для детекта PRICE_CHANGED"
+        timestamptz created_at
+        timestamptz updated_at
     }
     ORDERS {
         uuid id PK
@@ -653,6 +672,7 @@ erDiagram
         text workflow_id "связь с Temporal"
         text cancel_reason
         timestamptz created_at
+        timestamptz updated_at
         timestamptz placed_at
         timestamptz completed_at
     }
@@ -678,10 +698,12 @@ erDiagram
     }
     PAYMENTS {
         uuid id PK
-        uuid order_id FK
+        uuid order_id FK "UK: один платёж на заказ"
         text status "authorized|captured|voided"
         bigint amount_minor
         text provider_ref
+        timestamptz created_at
+        timestamptz updated_at
     }
 ```
 
@@ -698,7 +720,7 @@ erDiagram
     OUTBOX {
         bigint id PK "bigserial; про порядок — см. §5"
         uuid event_id UK "для дедупликации у консьюмера"
-        text aggregate_type "order|menu_item"
+        text aggregate_type "order|menu_item|menu_option|venue"
         uuid aggregate_id "= ключ партиции Kafka"
         text event_type "order.placed"
         jsonb payload
@@ -726,6 +748,7 @@ erDiagram
         bool venue_is_accepting "пауза приёма (M7)"
         double lat
         double lon
+        timestamptz updated_at
         tsvector search_vector "GENERATED, GIN-индекс"
     }
 ```
@@ -747,6 +770,18 @@ CREATE INDEX idx_orders_venue_status ON orders (venue_id, status, created_at DES
 CREATE INDEX idx_items_venue_active ON menu_items (venue_id, category_id, position)
     WHERE NOT is_archived;
 ```
+
+Перечислены индексы, за которыми стоит отдельное решение. Кроме них в схеме
+есть обычные индексы по внешним ключам частых выборок — состав корзины и заказа,
+история статусов, расписание и категории заведения, лента заказов пользователя,
+поиск позиции по заведению в витрине. Уникальность `(venue_id, external_id)`,
+`(user_id, idempotency_key)` и `outbox.event_id` обеспечена ограничениями,
+отдельные индексы для них не нужны.
+
+Вставка в `outbox` шлёт `NOTIFY outbox_new` триггером на уровне выражения —
+relay просыпается на записи, а не ждёт следующего тика опроса. Опрос остаётся
+страховкой: уведомление не переживает разрыв соединения, строка в таблице
+переживает.
 
 ---
 

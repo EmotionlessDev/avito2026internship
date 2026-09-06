@@ -17,6 +17,7 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/config"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
+	"github.com/emotionlessdev/avito-kitchen/internal/pg"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -39,7 +40,17 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	pool, err := pg.NewPool(ctx, cfg.Postgres)
+	if err != nil {
+		return err
+	}
+
+	defer pool.Close()
+
 	health := httpx.NewHealth()
+	health.Register("postgres", pg.HealthCheck(pool))
+	// Проверки Kafka и Temporal регистрируются здесь на этапах 6 и 7.
+
 	router := httpx.NewRouter(log, health)
 
 	log.InfoContext(ctx, "запускаю kitchen-worker",
