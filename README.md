@@ -15,9 +15,29 @@
   архитектура, модель данных, состав API, принятые решения с обоснованием.
 - [PLAN.md](PLAN.md) — план реализации по этапам; он же — приложенный «промпт (plan)»
   из задания.
-- [task.md](task.md) — текст задания.
+- [backend-trainee-assignment-autumn-2026.md](backend-trainee-assignment-autumn-2026.md) — текст задания.
 
 ## Запуск
 
-Появится на этапе 0: `docker compose up` — 8 сервисов с healthcheck'ами,
-`make lint test` — линтер и тесты, `scripts/demo.sh` — прогон всех бизнес-сценариев.
+```bash
+make up      # поднимает стенд и ждёт healthy у всех сервисов
+make lint    # golangci-lint (конфиг — .golangci.yml)
+make test    # go test ./... -race
+make down    # гасит стенд вместе с томами
+```
+
+`.env` не обязателен: у всех переменных в `docker-compose.yml` есть значения
+по умолчанию. Переопределения — по образцу из [.env.example](.env.example).
+
+| Сервис | Порт на хосте | Назначение |
+|---|---|---|
+| `kitchen-api` | 8080 | Public + Merchant API, `/healthz`, `/readyz` |
+| `kitchen-worker` | 8081 | Temporal worker, Kafka-консьюмеры, outbox-relay (этапы 6–7) |
+| `merchant-pos` | 8090 | Пример заведения — отдельная система со своим хранилищем |
+| Temporal UI | 8233 | История workflow'ов заказа |
+| Postgres | 55432 | Не 5432: локальная СУБД на дефолтном порту есть почти у всех |
+| Kafka | 9094 | Внешний listener для консольных утилит |
+
+Готово по этапам: **0** — каркас, конфигурация, логирование, graceful shutdown,
+пробы, Docker Compose, линтер. Дальше — схема БД и миграции (этап 1),
+`scripts/demo.sh` с прогоном всех бизнес-сценариев (этап 9).

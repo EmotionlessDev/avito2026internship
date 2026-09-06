@@ -1,0 +1,191 @@
+# Локальный стенд Авито.Кухни.
+#
+# Все переменные имеют значения по умолчанию, поэтому `docker compose up`
+# работает на чистом клоне без .env. Переопределения — в .env (см. .env.example).
+#
+# Порядок старта держится на healthcheck'ах, а не на sleep: Temporal auto-setup
+# накатывает свои схемы ~40 секунд, и без `condition: service_healthy`
+# зависимые сервисы стартуют раньше, чем он готов принимать вызовы.
+
+name: avito-kitchen
+
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kitchen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kitchen}
+      POSTGRES_DB: ${POSTGRES_DB:-kitchen}
+      # Инициализация с C-локалью и явной кодировкой: сортировка не должна
+      # зависеть от локали хоста, иначе индексы ведут себя по-разному у разных людей.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # 55432, а не 5432: локальный Postgres на дефолтном порту есть почти
+      # у каждого, и стенд не должен падать на коллизии при первом запуске.
+      # Внутри сети compose сервисы всё равно ходят на postgres:5432.
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kitchen} -d ${POSTGRES_DB:-kitchen}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  kafka:
+    image: apache/kafka:4.3.1
+    restart: unless-stopped
+    environment:
+      # KRaft: брокер и контроллер в одном узле — ZooKeeper не нужен.
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      # Два listener'а с разными advertised-адресами: сервисы внутри сети compose
+      # ходят по имени kafka, а kafka-консоль с хоста — по localhost.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT:-9094}
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Один брокер в стенде — репликация и min.isr обязаны быть 1,
+      # иначе внутренние топики не создадутся.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-9094}:9094"
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      # Проверяем не открытый порт, а способность обслужить запрос метаданных:
+      # порт слушается раньше, чем брокер готов отдавать топики.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  temporal:
+    image: temporalio/auto-setup:1.29.7
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-kitchen}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-kitchen}
+      # Temporal заводит собственные базы (temporal, temporal_visibility)
+      # в том же инстансе Postgres. В проде это был бы отдельный кластер —
+      # осознанное упрощение стенда, см. DESIGN.md §11.
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
+    ports:
+      - "${TEMPORAL_PORT:-7233}:7233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 45s
+
+  temporal-ui:
+    image: temporalio/ui:2.53.3
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:${TEMPORAL_UI_PORT:-8233}
+    ports:
+      - "${TEMPORAL_UI_PORT:-8233}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  kitchen-api:
+    build: &go-build
+      context: .
+      dockerfile: build/Dockerfile
+      args:
+        SERVICE: kitchen-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: &app-env
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+    ports:
+      - "${KITCHEN_API_PORT:-8080}:8080"
+    healthcheck:
+      # /readyz, а не /healthz: контейнер считается готовым, только когда
+      # готовы его зависимости — иначе merchant-pos пойдёт импортировать меню
+      # в сервис, ещё не подключившийся к базе.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/readyz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  kitchen-worker:
+    build:
+      <<: *go-build
+      args:
+        SERVICE: kitchen-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    environment: *app-env
+    ports:
+      - "${KITCHEN_WORKER_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/readyz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  merchant-pos:
+    build:
+      <<: *go-build
+      args:
+        SERVICE: merchant-pos
+    restart: unless-stopped
+    depends_on:
+      kitchen-api:
+        condition: service_healthy
+    environment:
+      POS_LOG_LEVEL: ${LOG_LEVEL:-info}
+      POS_PLATFORM_BASE_URL: http://kitchen-api:8080
+    ports:
+      - "${MERCHANT_POS_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8090/readyz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  pgdata:
+  kafkadata:

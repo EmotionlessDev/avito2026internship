@@ -1,0 +1,173 @@
+# Конфигурация golangci-lint (схема v2).
+# Требование задания: конфигурация статического анализа лежит в репозитории.
+#
+# Подход: default: none и явный список — чтобы набор линтеров был осознанным
+# решением, а не тем, что случайно включено в версии инструмента у проверяющего.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # --- корректность ---
+    - errcheck        # непроверенные ошибки
+    - govet           # штатный vet, включая shadow ниже
+    - ineffassign     # присваивание, которое никто не читает
+    - staticcheck     # включает бывшие stylecheck и gosimple
+    - unused          # мёртвый код
+    - bodyclose       # незакрытый resp.Body — утечка соединений
+    - sqlclosecheck   # незакрытые rows: критично, SQL пишем руками
+    - rowserrcheck    # забытый rows.Err() прячет ошибку чтения
+    - nilerr          # `if err != nil { return nil }`
+    - nilnil          # одновременно nil-результат и nil-ошибка
+    - errorlint       # сравнение ошибок мимо errors.Is/As
+    - contextcheck    # потерянный context между вызовами
+    - noctx           # HTTP-запрос без контекста
+    - makezero        # append к make([]T, n) вместо make([]T, 0, n)
+    - durationcheck   # умножение двух Duration
+    - exhaustive      # неполный switch по enum — статусы заказа в первую очередь
+    - reassign        # переприсваивание переменных чужих пакетов
+    - asasalint       # []any в вариадик-функцию
+    - protogetter     # доступ к полю вместо геттера
+
+    # --- безопасность и границы ---
+    - gosec           # типовые проблемы безопасности
+    - depguard        # граница платформы и merchant-pos, см. settings ниже
+    - forbidigo       # запрещённые вызовы (fmt.Print* в сервисном коде)
+
+    # --- читаемость и поддержка ---
+    - revive          # замена golint: имена, экспортируемые комментарии
+    - gocritic        # набор диагностик по стилю и производительности
+    - gocyclo         # цикломатическая сложность
+    - goconst         # повторяющиеся строковые литералы
+    - dupl            # копипаста
+    - misspell        # опечатки в английских словах
+    - unconvert       # бессмысленные конверсии типов
+    - unparam         # неиспользуемые параметры и всегда одинаковые результаты
+    - predeclared     # затенение предопределённых имён (len, cap, new)
+    - usestdlibvars   # http.MethodGet вместо "GET"
+    - perfsprint      # fmt.Sprintf там, где хватит конкатенации
+    - prealloc        # слайсы без преаллокации в горячих циклах
+    - wastedassign    # бесполезные присваивания
+    - nakedret        # голый return в длинной функции
+    - nolintlint      # //nolint без объяснения причины
+    - gochecknoinits  # init() прячет порядок инициализации
+    - sloglint        # единый стиль структурных логов
+    - testifylint     # корректное использование testify
+    - thelper         # t.Helper() в тестовых хелперах
+    - tparallel       # ошибки в t.Parallel
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # ради выравнивания структур ломается читаемый порядок полей
+
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+
+    exhaustive:
+      # Статусы заказа и коды проблем валидации — text+CHECK enum'ы;
+      # забытая ветка в switch по ним должна валить сборку, а не тихо ничего не делать.
+      default-signifies-exhaustive: false
+
+    gocyclo:
+      min-complexity: 15
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+      ignore-tests: true
+
+    dupl:
+      threshold: 150
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    revive:
+      rules:
+        - name: exported
+        - name: error-return
+        - name: error-strings
+          disabled: true  # тексты ошибок у нас по-русски
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: indent-error-flow
+        - name: early-return
+        - name: unnecessary-stmt
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: waitgroup-by-value
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - whyNoLint       # дублирует nolintlint
+        - hugeParam       # конфиги передаём по значению осознанно
+        - importShadow
+
+    forbidigo:
+      forbid:
+        # Вывод в stdout мимо slog: логи должны быть структурными и с request-id.
+        # В main.go до сборки логгера остаётся Fprintf в stderr — он разрешён.
+        - pattern: '^fmt\.Print.*$'
+          msg: используйте slog вместо fmt.Print*
+
+    sloglint:
+      no-mixed-args: true
+      kv-only: false
+      attr-only: true      # только slog.String("k", v), без чередования ключ/значение
+      context: scope       # предпочитать *Context-варианты там, где контекст есть
+      static-msg: true     # сообщение — константа, переменное уходит в атрибуты
+
+    depguard:
+      rules:
+        # Граница двух систем. merchant-pos — эмулятор стороннего заведения:
+        # он обязан ходить в платформу по HTTP-контрактам из api/, а не через
+        # общие пакеты. Правило превращает договорённость в ошибку сборки.
+        merchant-pos-isolation:
+          # lax: запрещено только перечисленное в deny, allow перекрывает deny.
+          list-mode: lax
+          files:
+            - '**/cmd/merchant-pos/**'
+            - '**/internal/pos/**'
+          deny:
+            - pkg: github.com/emotionlessdev/avito-kitchen/internal
+              desc: "merchant-pos — отдельная система: общение с платформой только по HTTP-контрактам из api/"
+          allow:
+            - github.com/emotionlessdev/avito-kitchen/internal/pos   # собственные пакеты заведения
+            - github.com/emotionlessdev/avito-kitchen/internal/gen   # сгенерированные из OpenAPI клиенты (этап 2)
+
+  exclusions:
+    generated: lax
+    rules:
+      # В тестах допускаем длинные табличные функции и повторы фикстур.
+      - path: _test\.go
+        linters:
+          - dupl
+          - gocyclo
+          - goconst
+          - gosec
+      # main.go до инициализации логгера пишет ошибку в stderr — это не логирование.
+      - path: cmd/.*/main\.go
+        linters:
+          - forbidigo
+
+formatters:
+  enable:
+    - gofumpt     # строже gofmt
+    - goimports   # группировка импортов
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/emotionlessdev/avito-kitchen

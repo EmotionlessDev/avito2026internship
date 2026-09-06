@@ -1,0 +1,15 @@
+# Локальные бинари инструментов (версии пинятся в Makefile)
+/bin/
+
+# Сборка
+/build/out/
+
+# Окружение
+.env
+
+# Покрытие
+coverage.out
+coverage.html
+
+# macOS
+.DS_Store

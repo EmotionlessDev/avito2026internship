@@ -1,0 +1,9 @@
+.git
+.github
+bin
+docs
+*.md
+!README.md
+.env
+.DS_Store
+tests/e2e/testdata

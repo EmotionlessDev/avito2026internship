@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 (`merchant-pos`) в одном репозитории. Репозиторий в фазе проектирования — кода ещё нет,
 есть три управляющих документа:
 
-- `task.md` — текст задания и критерии приёмки. Не редактируется.
+- `backend-trainee-assignment-autumn-2026.md` — текст задания и критерии приёмки. Не редактируется.
 - `PLAN.md` — этапы 0–11 с DoD. Разработка идёт строго по этапам; каждый этап
   заканчивается работающим состоянием (`docker compose up` поднимается,
   `make lint test` зелёный).
