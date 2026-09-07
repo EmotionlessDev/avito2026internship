@@ -317,7 +317,12 @@ func TestCreateRejectsEmptyCart(t *testing.T) {
 
 	_, _, err := service.Create(testContext(t), userID, request("key-1"))
 
-	require.ErrorIs(t, err, order.ErrCartNotValid)
+	// Пустая корзина — не «нашлись проблемы», а «нечего оформлять»:
+	// клиенту нужен собственный код, а не CART_NOT_VALID с пустым issues[].
+	require.ErrorIs(t, err, order.ErrCartEmpty)
+
+	var validation order.ValidationError
+	require.NotErrorAs(t, err, &validation)
 }
 
 // Ретрай сети приходит уже после того, как корзина очищена. Он обязан

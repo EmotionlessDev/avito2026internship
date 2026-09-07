@@ -29,9 +29,12 @@ FROM alpine:${ALPINE_VERSION} AS runtime
 
 # ca-certificates — для исходящих HTTPS-вызовов;
 # tzdata — потому что расписание заведения считается в его часовом поясе,
-# а без базы зон time.LoadLocation("Europe/Moscow") вернёт ошибку.
+# а без базы зон time.LoadLocation("Europe/Moscow") вернёт ошибку;
+# /data — каталог под SQLite сервиса заведения: том монтируется поверх него
+# и наследует владельца, иначе процесс без прав root не создаст файл базы.
 RUN apk add --no-cache ca-certificates tzdata \
- && adduser -D -u 10001 app
+ && adduser -D -u 10001 app \
+ && mkdir -p /data && chown app:app /data
 
 COPY --from=build /out/service /usr/local/bin/service
 

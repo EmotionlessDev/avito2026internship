@@ -124,7 +124,7 @@ func (s *Service) Create(
 	}
 
 	if current.IsEmpty() || current.VenueID == nil {
-		return Order{}, false, ValidationError{}
+		return Order{}, false, ErrCartEmpty
 	}
 
 	venue, err := s.venues.GetVenue(ctx, *current.VenueID, nil)

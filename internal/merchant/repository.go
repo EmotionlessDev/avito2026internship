@@ -992,3 +992,91 @@ func (r *Repository) inTx(ctx context.Context, do func(tx pgx.Tx) error) error {
 
 	return nil
 }
+
+// WebhookTarget — заведение, у которого есть куда постучаться.
+type WebhookTarget struct {
+	VenueID uuid.UUID
+	URL     string
+	Secret  string
+}
+
+// VenuesWithWebhook отдаёт заведения с активным вебхуком.
+//
+// Нужен суточной сверке: спросить меню можно только у того, кто оставил
+// адрес. Заведения без вебхука работают поллингом, и сверять их нечем.
+func (r *Repository) VenuesWithWebhook(ctx context.Context) ([]WebhookTarget, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT w.venue_id, w.url, w.secret
+		FROM venue_webhooks w
+		JOIN venues v ON v.id = w.venue_id
+		WHERE w.is_active AND v.status = 'active'
+		ORDER BY w.venue_id`)
+	if err != nil {
+		return nil, fmt.Errorf("выборка вебхуков: %w", err)
+	}
+
+	defer rows.Close()
+
+	var targets []WebhookTarget
+
+	for rows.Next() {
+		var target WebhookTarget
+
+		if err := rows.Scan(&target.VenueID, &target.URL, &target.Secret); err != nil {
+			return nil, fmt.Errorf("чтение вебхука: %w", err)
+		}
+
+		targets = append(targets, target)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("чтение вебхуков: %w", err)
+	}
+
+	return targets, nil
+}
+
+// MenuItemState — состояние позиции, которое сверяется с заведением.
+type MenuItemState struct {
+	PriceMinor  int64
+	IsAvailable bool
+}
+
+// MenuSnapshotFor отдаёт живое меню заведения в виде «артикул → состояние».
+//
+// venue_id приходит параметром, а не из контекста: сверку запускает система,
+// у которой API-ключа нет. Фильтр по заведению при этом на месте.
+func (r *Repository) MenuSnapshotFor(
+	ctx context.Context, venueID uuid.UUID,
+) (map[string]MenuItemState, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT external_id, price_minor, is_available
+		FROM menu_items
+		WHERE venue_id = $1 AND NOT is_archived`, venueID)
+	if err != nil {
+		return nil, fmt.Errorf("снимок меню заведения: %w", err)
+	}
+
+	defer rows.Close()
+
+	items := make(map[string]MenuItemState)
+
+	for rows.Next() {
+		var (
+			externalID string
+			state      MenuItemState
+		)
+
+		if err := rows.Scan(&externalID, &state.PriceMinor, &state.IsAvailable); err != nil {
+			return nil, fmt.Errorf("чтение позиции меню: %w", err)
+		}
+
+		items[externalID] = state
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("чтение меню: %w", err)
+	}
+
+	return items, nil
+}

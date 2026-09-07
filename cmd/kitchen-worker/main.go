@@ -138,8 +138,11 @@ func run() error {
 	temporalWorker := worker.New(temporal, cfg.Temporal.TaskQueue, worker.Options{})
 	temporalWorker.RegisterWorkflow(orderworkflow.OrderWorkflow)
 	temporalWorker.RegisterWorkflow(orderworkflow.StopListWorkflow)
+	temporalWorker.RegisterWorkflow(orderworkflow.MenuReconciliationWorkflow)
 	temporalWorker.RegisterActivity(orderworkflow.NewActivities(orderRepo, payments.NewMock()))
-	temporalWorker.RegisterActivity(orderworkflow.NewStopListActivities(merchant.NewRepository(pool)))
+	menuRepo := merchant.NewRepository(pool)
+	temporalWorker.RegisterActivity(orderworkflow.NewStopListActivities(menuRepo))
+	temporalWorker.RegisterActivity(orderworkflow.NewReconcileActivities(menuRepo))
 
 	g.Go(func() error {
 		defer temporalWorker.Stop()
@@ -166,6 +169,13 @@ func run() error {
 	}
 
 	g.Go(func() error { return starter.Run(ctx) })
+
+	// Суточная сверка меню: расхождения между каталогом и заведением ловятся
+	// расписанием, а не надеждой на то, что ни одно событие не потеряется
+	// (docs/DESIGN.md §6.4).
+	if scheduleErr := orderworkflow.ScheduleReconciliation(ctx, temporal, cfg.Temporal.TaskQueue, log); scheduleErr != nil {
+		return scheduleErr
+	}
 
 	if err := g.Wait(); err != nil {
 		return err
