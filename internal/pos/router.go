@@ -27,18 +27,25 @@ func (s *Service) router() http.Handler {
 	router.Get("/healthz", s.health)
 	router.Get("/readyz", s.health)
 
-	// Вебхуки: маршруты и разбор тела берутся из сгенерированного кода,
-	// подпись проверяется middleware до хендлера.
+	// Вебхуки: маршруты и разбор тела берутся из сгенерированного кода.
+	//
+	// Проверка подписи навешена на подроутер, а не передана генератору
+	// списком middleware: сгенерированная обёртка сначала разбирает
+	// обязательные заголовки и только потом зовёт middleware, поэтому запрос
+	// без подписи получал бы 400 «нет заголовка» вместо честного 401.
+	webhooks := chi.NewRouter()
+	webhooks.Use(s.verifySignature)
+
 	strict := pos.NewStrictHandler(s, nil)
 	pos.HandlerWithOptions(strict, pos.ChiServerOptions{
-		BaseURL:     webhookBasePath,
-		BaseRouter:  router,
-		Middlewares: []pos.MiddlewareFunc{s.verifySignature},
+		BaseRouter: webhooks,
 		ErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeJSON(r.Context(), s.log, w, http.StatusBadRequest,
 				map[string]string{fieldError: err.Error()})
 		},
 	})
+
+	router.Mount(webhookBasePath, webhooks)
 
 	router.Route("/pos/orders", func(r chi.Router) {
 		r.Get("/", s.listOrders)

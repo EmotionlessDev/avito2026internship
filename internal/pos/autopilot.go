@@ -140,17 +140,26 @@ func (s *Service) markDelivered(ctx context.Context, order Order) error {
 
 // handleTransitionError разбирает отказ платформы.
 //
-// 409 означает, что заказ уже ушёл дальше без нас: пользователь отменил его
-// или сработал таймаут. Для кухни это не ошибка — заказ просто снимается
-// с производства, и повторять попытку не нужно.
+// Два исхода снимают заказ с производства навсегда, и повторять их нельзя:
+//
+//   - 409 — заказ уже ушёл дальше без нас: пользователь отменил его или
+//     сработал таймаут подтверждения;
+//   - 404 — платформа такого заказа не знает. Так бывает после ручных
+//     экспериментов с вебхуком: без этой ветки автопилот бился бы в закрытую
+//     дверь каждую секунду и заваливал лог.
+//
+// Всё остальное — временные сбои, их стоит повторить на следующем тике.
 func (s *Service) handleTransitionError(ctx context.Context, order Order, err error) error {
-	var unexpected errUnexpectedStatus
-	if errors.As(err, &unexpected) && unexpected.status == 409 {
+	switch {
+	case errors.Is(err, ErrTransitionRejected):
 		s.log.InfoContext(ctx, "платформа уже перевела заказ дальше",
 			slog.String("order", order.Number))
-
-		return s.storage.SetStatus(ctx, order.ID, statusCancelled, time.Now().UTC())
+	case errors.Is(err, ErrOrderUnknownToPlatform):
+		s.log.WarnContext(ctx, "платформа не знает такого заказа, снимаем с производства",
+			slog.String("order", order.Number))
+	default:
+		return err
 	}
 
-	return err
+	return s.storage.SetStatus(ctx, order.ID, statusCancelled, time.Now().UTC())
 }

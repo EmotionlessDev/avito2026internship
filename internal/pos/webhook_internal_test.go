@@ -106,3 +106,21 @@ func TestSnapshotGroups(t *testing.T) {
 
 	assert.Empty(t, snapshotGroups(groups, "hv-009"), "у позиции без модификаторов их и нет")
 }
+
+// Отказы платформы, после которых заказ бессмысленно повторять, распознаются
+// по коду ответа: без этого автопилот бился бы в закрытую дверь каждую секунду.
+func TestPlatformErrorsAreComparable(t *testing.T) {
+	t.Parallel()
+
+	conflict := statusError(409, []byte(`{"code":"INVALID_ORDER_TRANSITION"}`))
+	notFound := statusError(404, []byte(`{"code":"ORDER_NOT_FOUND"}`))
+	server := statusError(500, nil)
+
+	assert.ErrorIs(t, conflict, ErrTransitionRejected)
+	assert.ErrorIs(t, notFound, ErrOrderUnknownToPlatform)
+
+	assert.NotErrorIs(t, server, ErrTransitionRejected)
+	assert.NotErrorIs(t, server, ErrOrderUnknownToPlatform,
+		"временный сбой не должен выглядеть как окончательный отказ")
+	assert.NotErrorIs(t, conflict, ErrOrderUnknownToPlatform)
+}

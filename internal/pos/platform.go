@@ -260,6 +260,8 @@ func expectOK(status int, body []byte, action string) error {
 		return nil
 	case http.StatusConflict:
 		return fmt.Errorf("%s: %w", action, ErrTransitionRejected)
+	case http.StatusNotFound:
+		return fmt.Errorf("%s: %w", action, ErrOrderUnknownToPlatform)
 	default:
 		return fmt.Errorf("%s: %w", action, statusError(status, body))
 	}
@@ -269,9 +271,21 @@ func expectOK(status int, body []byte, action string) error {
 // уже изменилось.
 var ErrTransitionRejected = errUnexpectedStatus{status: http.StatusConflict}
 
+// ErrOrderUnknownToPlatform — платформа не знает такого заказа. Повторять
+// нечего: заказ либо чужой, либо его никогда не было.
+var ErrOrderUnknownToPlatform = errUnexpectedStatus{status: http.StatusNotFound}
+
 type errUnexpectedStatus struct {
 	status int
 	body   string
+}
+
+// Is сравнивает ошибки по коду ответа: тело у них разное, а смысл —
+// в статусе, который вернула платформа.
+func (e errUnexpectedStatus) Is(target error) bool {
+	other, ok := target.(errUnexpectedStatus)
+
+	return ok && other.status == e.status
 }
 
 func (e errUnexpectedStatus) Error() string {
