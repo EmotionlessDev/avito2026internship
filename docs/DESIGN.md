@@ -861,7 +861,7 @@ SSE в MVP реализован поллингом `order_status_history` вну
     { "code": "PRICE_CHANGED", "severity": "confirmable",
       "item_id": "018f...", "old_price_minor": 45000, "new_price_minor": 52000 },
     { "code": "MIN_ORDER_NOT_MET", "severity": "blocking",
-      "min_order_minor": 100000, "missing_minor": 7100 }
+      "min_order_minor": 100000, "missing_minor": 22000 }
   ]
 }
 ```

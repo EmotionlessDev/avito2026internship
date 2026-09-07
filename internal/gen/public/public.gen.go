@@ -200,8 +200,13 @@ type Cart struct {
 // у `MIN_ORDER_NOT_MET` это `min_order_minor` и `missing_minor`,
 // у `PRICE_CHANGED` — старая и новая цена, у товарных проблем — позиция.
 type CartIssue struct {
-	// Code Полный список кодов каскада валидации (`docs/DESIGN.md` §2). Каждый код —
+	// Code Полный список кодов проблем корзины (`docs/DESIGN.md` §2). Каждый код —
 	// отдельная ветка в коде и отдельный тест.
+	//
+	// Это общий словарь проблем, а не перечень того, что умеет одна ручка:
+	// `CART_MIXED_VENUES` приходит только с `409` при добавлении позиции —
+	// в корзине всегда одно заведение, поэтому в ответе `/cart/validate`
+	// этого кода не бывает.
 	Code            CartIssueCode       `json:"code"`
 	DeliveryRadiusM *int                `json:"delivery_radius_m,omitempty"`
 	DistanceM       *int                `json:"distance_m,omitempty"`
@@ -214,7 +219,8 @@ type CartIssue struct {
 	Message       *string `json:"message,omitempty"`
 	MinOrderMinor *int64  `json:"min_order_minor,omitempty"`
 
-	// MissingMinor Сколько не хватает до минимальной суммы заказа
+	// MissingMinor Сколько не хватает до минимальной суммы заказа. Минимум считается
+	// от стоимости блюд: доставка не помогает его набрать.
 	MissingMinor  *int64 `json:"missing_minor,omitempty"`
 	NewPriceMinor *int64 `json:"new_price_minor,omitempty"`
 
@@ -229,8 +235,13 @@ type CartIssue struct {
 	Severity IssueSeverity `json:"severity"`
 }
 
-// CartIssueCode Полный список кодов каскада валидации (`docs/DESIGN.md` §2). Каждый код —
+// CartIssueCode Полный список кодов проблем корзины (`docs/DESIGN.md` §2). Каждый код —
 // отдельная ветка в коде и отдельный тест.
+//
+// Это общий словарь проблем, а не перечень того, что умеет одна ручка:
+// `CART_MIXED_VENUES` приходит только с `409` при добавлении позиции —
+// в корзине всегда одно заведение, поэтому в ответе `/cart/validate`
+// этого кода не бывает.
 type CartIssueCode string
 
 // CartItem Позиция корзины: количество, выбранные опции и текущая цена
@@ -281,7 +292,11 @@ type CartNotValidProblem struct {
 // CartValidation Диагноз корзины, а не ошибка. Суммы посчитаны по актуальным ценам,
 // поэтому клиент показывает итог и список проблем из одного ответа.
 //
-// Example: {"delivery_fee_minor":14900,"is_valid":false,"issues":[{"code":"ITEM_UNAVAILABLE","item_id":"01890000-0003-7000-8000-000000000104","item_name":"Хинкали с бараниной","message":"Закончились","severity":"blocking"},{"code":"PRICE_CHANGED","item_id":"01890000-0003-7000-8000-000000000101","new_price_minor":52000,"old_price_minor":45000,"severity":"confirmable"},{"code":"MIN_ORDER_NOT_MET","min_order_minor":100000,"missing_minor":7100,"severity":"blocking"}],"items_amount_minor":78000,"total_amount_minor":92900,"venue_id":"01890000-0001-7000-8000-000000000001"}
+// Пустая корзина — это `is_valid: false` с пустым `issues[]`: оформлять
+// нечего, но и проблемы нет. Отдельного кода на это не заведено — клиент
+// видит пустую корзину и без нас.
+//
+// Example: {"delivery_fee_minor":14900,"is_valid":false,"issues":[{"code":"ITEM_UNAVAILABLE","item_id":"01890000-0003-7000-8000-000000000104","item_name":"Хинкали с бараниной","message":"Закончились","severity":"blocking"},{"code":"PRICE_CHANGED","item_id":"01890000-0003-7000-8000-000000000101","new_price_minor":52000,"old_price_minor":45000,"severity":"confirmable"},{"code":"MIN_ORDER_NOT_MET","min_order_minor":100000,"missing_minor":22000,"severity":"blocking"}],"items_amount_minor":78000,"total_amount_minor":92900,"venue_id":"01890000-0001-7000-8000-000000000001"}
 type CartValidation struct {
 	// DeliveryFeeMinor Сумма в копейках. Дробных денег в API нет — только целые копейки.
 	//
@@ -751,6 +766,11 @@ type BadRequest = Problem
 // расширение стандарта: машиночитаемый код, по которому клиент выбирает
 // текст и действие, не разбирая `detail`.
 type NotFound = Problem
+
+// Unauthorized Ошибка по RFC 9457 (`application/problem+json`). Поле `code` —
+// расширение стандарта: машиночитаемый код, по которому клиент выбирает
+// текст и действие, не разбирая `detail`.
+type Unauthorized = Problem
 
 // ListOrdersParams defines parameters for ListOrders.
 type ListOrdersParams struct {
@@ -2537,6 +2557,13 @@ type ClientWithResponsesInterface interface {
 type ClearCartResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ClearCartResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetBody returns the raw response body bytes
@@ -2573,11 +2600,18 @@ type GetCartResponse struct {
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *Cart
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r GetCartResponse) GetJSON200() *Cart {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r GetCartResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetBody returns the raw response body bytes
@@ -2616,6 +2650,8 @@ type AddCartItemResponse struct {
 	JSON200 *Cart
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
 	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
@@ -2630,6 +2666,11 @@ func (r AddCartItemResponse) GetJSON200() *Cart {
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
 func (r AddCartItemResponse) GetApplicationproblemJSON400() *BadRequest {
 	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AddCartItemResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -2676,6 +2717,8 @@ type DeleteCartItemResponse struct {
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *Cart
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 }
@@ -2683,6 +2726,11 @@ type DeleteCartItemResponse struct {
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r DeleteCartItemResponse) GetJSON200() *Cart {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r DeleteCartItemResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -2726,6 +2774,8 @@ type UpdateCartItemResponse struct {
 	JSON200 *Cart
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
 	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 }
@@ -2738,6 +2788,11 @@ func (r UpdateCartItemResponse) GetJSON200() *Cart {
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
 func (r UpdateCartItemResponse) GetApplicationproblemJSON400() *BadRequest {
 	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r UpdateCartItemResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -2781,6 +2836,8 @@ type ValidateCartResponse struct {
 	JSON200 *CartValidation
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
 	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
@@ -2791,6 +2848,11 @@ func (r ValidateCartResponse) GetJSON200() *CartValidation {
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
 func (r ValidateCartResponse) GetApplicationproblemJSON400() *BadRequest {
 	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ValidateCartResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetBody returns the raw response body bytes
@@ -2827,11 +2889,18 @@ type ListOrdersResponse struct {
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *OrderList
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r ListOrdersResponse) GetJSON200() *OrderList {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ListOrdersResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetBody returns the raw response body bytes
@@ -2872,6 +2941,8 @@ type CreateOrderResponse struct {
 	JSON201 *Order
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
 	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
 	ApplicationproblemJSON409 *Problem
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
@@ -2891,6 +2962,11 @@ func (r CreateOrderResponse) GetJSON201() *Order {
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
 func (r CreateOrderResponse) GetApplicationproblemJSON400() *BadRequest {
 	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r CreateOrderResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
@@ -2937,6 +3013,8 @@ type GetOrderResponse struct {
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *Order
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 }
@@ -2944,6 +3022,11 @@ type GetOrderResponse struct {
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r GetOrderResponse) GetJSON200() *Order {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r GetOrderResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -2985,6 +3068,8 @@ type CancelOrderResponse struct {
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *Order
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
@@ -2994,6 +3079,11 @@ type CancelOrderResponse struct {
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r CancelOrderResponse) GetJSON200() *Order {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r CancelOrderResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -3038,8 +3128,15 @@ func (r CancelOrderResponse) ContentType() string {
 type StreamOrderEventsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r StreamOrderEventsResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -3608,6 +3705,19 @@ func ParseClearCartResponse(rsp *http.Response) (*ClearCartResponse, error) {
 		HTTPResponse: rsp,
 	}
 
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	}
+
 	return response, nil
 }
 
@@ -3631,6 +3741,13 @@ func ParseGetCartResponse(rsp *http.Response) (*GetCartResponse, error) {
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
 
 	}
 
@@ -3664,6 +3781,13 @@ func ParseAddCartItemResponse(rsp *http.Response) (*AddCartItemResponse, error) 
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
@@ -3705,6 +3829,13 @@ func ParseDeleteCartItemResponse(rsp *http.Response) (*DeleteCartItemResponse, e
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -3744,6 +3875,13 @@ func ParseUpdateCartItemResponse(rsp *http.Response) (*UpdateCartItemResponse, e
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
@@ -3785,6 +3923,13 @@ func ParseValidateCartResponse(rsp *http.Response) (*ValidateCartResponse, error
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
 	}
 
 	return response, nil
@@ -3810,6 +3955,13 @@ func ParseListOrdersResponse(rsp *http.Response) (*ListOrdersResponse, error) {
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
 
 	}
 
@@ -3851,6 +4003,13 @@ func ParseCreateOrderResponse(rsp *http.Response) (*CreateOrderResponse, error) 
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
 		var dest Problem
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -3891,6 +4050,13 @@ func ParseGetOrderResponse(rsp *http.Response) (*GetOrderResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -3923,6 +4089,13 @@ func ParseCancelOrderResponse(rsp *http.Response) (*CancelOrderResponse, error) 
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
@@ -3957,6 +4130,13 @@ func ParseStreamOrderEventsResponse(rsp *http.Response) (*StreamOrderEventsRespo
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4986,6 +5166,8 @@ type BadRequestApplicationProblemPlusJSONResponse Problem
 
 type NotFoundApplicationProblemPlusJSONResponse Problem
 
+type UnauthorizedApplicationProblemPlusJSONResponse Problem
+
 type ClearCartRequestObject struct {
 }
 
@@ -4999,6 +5181,22 @@ type ClearCart204Response struct {
 func (response ClearCart204Response) VisitClearCartResponse(w http.ResponseWriter) error {
 	w.WriteHeader(204)
 	return nil
+}
+
+type ClearCart401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response ClearCart401ApplicationProblemPlusJSONResponse) VisitClearCartResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
 }
 
 type GetCartRequestObject struct {
@@ -5018,6 +5216,22 @@ func (response GetCart200JSONResponse) VisitGetCartResponse(w http.ResponseWrite
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCart401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response GetCart401ApplicationProblemPlusJSONResponse) VisitGetCartResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5056,6 +5270,22 @@ func (response AddCartItem400ApplicationProblemPlusJSONResponse) VisitAddCartIte
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddCartItem401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response AddCartItem401ApplicationProblemPlusJSONResponse) VisitAddCartItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5108,6 +5338,22 @@ func (response DeleteCartItem200JSONResponse) VisitDeleteCartItemResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCartItem401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteCartItem401ApplicationProblemPlusJSONResponse) VisitDeleteCartItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5167,6 +5413,22 @@ func (response UpdateCartItem400ApplicationProblemPlusJSONResponse) VisitUpdateC
 	return err
 }
 
+type UpdateCartItem401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateCartItem401ApplicationProblemPlusJSONResponse) VisitUpdateCartItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type UpdateCartItem404ApplicationProblemPlusJSONResponse struct {
 	NotFoundApplicationProblemPlusJSONResponse
 }
@@ -5221,6 +5483,22 @@ func (response ValidateCart400ApplicationProblemPlusJSONResponse) VisitValidateC
 	return err
 }
 
+type ValidateCart401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response ValidateCart401ApplicationProblemPlusJSONResponse) VisitValidateCartResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListOrdersRequestObject struct {
 	Params ListOrdersParams
 }
@@ -5239,6 +5517,22 @@ func (response ListOrders200JSONResponse) VisitListOrdersResponse(w http.Respons
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOrders401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response ListOrders401ApplicationProblemPlusJSONResponse) VisitListOrdersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5296,6 +5590,22 @@ func (response CreateOrder400ApplicationProblemPlusJSONResponse) VisitCreateOrde
 	return err
 }
 
+type CreateOrder401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response CreateOrder401ApplicationProblemPlusJSONResponse) VisitCreateOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateOrder409ApplicationProblemPlusJSONResponse Problem
 
 func (response CreateOrder409ApplicationProblemPlusJSONResponse) VisitCreateOrderResponse(w http.ResponseWriter) error {
@@ -5346,6 +5656,22 @@ func (response GetOrder200JSONResponse) VisitGetOrderResponse(w http.ResponseWri
 	return err
 }
 
+type GetOrder401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response GetOrder401ApplicationProblemPlusJSONResponse) VisitGetOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetOrder404ApplicationProblemPlusJSONResponse struct {
 	NotFoundApplicationProblemPlusJSONResponse
 }
@@ -5381,6 +5707,22 @@ func (response CancelOrder200JSONResponse) VisitCancelOrderResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelOrder401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response CancelOrder401ApplicationProblemPlusJSONResponse) VisitCancelOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5464,6 +5806,22 @@ func (response StreamOrderEvents200TexteventStreamResponse) VisitStreamOrderEven
 			return err
 		}
 	}
+}
+
+type StreamOrderEvents401ApplicationProblemPlusJSONResponse struct {
+	UnauthorizedApplicationProblemPlusJSONResponse
+}
+
+func (response StreamOrderEvents401ApplicationProblemPlusJSONResponse) VisitStreamOrderEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
 }
 
 type StreamOrderEvents404ApplicationProblemPlusJSONResponse struct {
@@ -6152,151 +6510,157 @@ func (sh *strictHandler) GetVenueMenu(w http.ResponseWriter, r *http.Request, ve
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"Ll1y1A3bUcGIsHcx70f0Au72WL67/P8GAA==",
+	"3H15c9tWtudXQWHeH4kfJEG0vIj+Y8otK2m9ti1XvLzF8hAwCVvskIBCgo71PK7SEsdJOWO1ezLVXZ5O",
+	"8tJv3rypSk0VTYsxtZCq8ie4+ArzSabOOfcC9wIXJLXYyUz/0bFI8OIuZ/2d5T4yy0F9JfA9P2yaxUfm",
+	"ittw617oNfCvObcRLoRefaECf1W8ZrlRXQmrgW8WTfZnts26rB9tsF70BeuxXdaONtggWjPYARuwN6wX",
+	"fcl6rGewjsF24Qv4jPVZ17TMKgyx4obLpmX6bt0zi2Y5eZllNrzPWtWGVzGLYaPlWWazvOzVXZjFvaBR",
+	"d0OzaLZaVXgyXF2BXzfDRtW/bz5+bJlzrUYzaGhm/DLajNaidZxjtM72WJdtR5vR8+hr1mU7RrQebURr",
+	"rM36MPXomcF67A0tZi/aMhzfexiWyji4I5bwWctrrEproFfL8627Dy97/v1w2SyemS7o5nvZDTWT/V+s",
+	"F62xQbTB2mIO37A3bMA6uM9dmNMFg3XYPuvCzFnXiNYNpxb4Dny6y/ai59FT1mbdaMOAZUXr0dPoRfLH",
+	"Op7WFq52y7RM76FbX6l5ZvHMmclzM3ZBv8KaG5ra46gErbs1z7RgwdV6q24WZ23LrFd9+mNi1o7X7rfq",
+	"d70Grb1ar+pW/y+szd7g0tYy55Kz9zUcSp5bxbvntmqhWSzY0rSmbXle0/Gsqn7o3RfTCnwaQJnUt3AK",
+	"7PWIQ5G38vS5ybOF8znzDfxxd3L6vLKV+Gd2LxcbFa9xWFZ9w9rwJ/xXz5YBH/V4PHnL81veUebWYV16",
+	"gFOpZoYP+NjHmeFj+HFzJfCbHkq+37iVT7zPWl4TibMc+KHn4z/dlZVatezC7KdWGsHdmlf/2983iVyS",
+	"1/1Nw7tnFs3/MJVI1yn6tjl1jX5FL01txnesS6IyWoN/RRusHz1jO7QVBygP1s3Hlnk1CD8KWn7lvU7u",
+	"X1DQoAg1QIzD/7XZDh0PzOqm77bC5aBR/Wfv/c7sBy0nfsNnOeD6CGbbL9JevoZf4NMDtms4/zBxs+k1",
+	"JhYqjgHcjcvcQAnZiTZRgrIe22O9JR+HxNN5g0N0WA+f3EI112NvgGLxl302gNfkyolJg73Ev9o4k9cG",
+	"69GzvWid7aKUZq9I1kTPo40lH6bPBsAJbB/+ZalqtY0DxPwcPTP+z9q3uAXRxuSSj2zINxP2+mI5DBo3",
+	"kA00inIDJt6JntHk8Z17MLsuLD16wgZsG+UyLCDajNZReng+iKfbZqvpgQ5EvgQRt9oMvbp5J8N1lnmx",
+	"UhE2hsRuqdn8O81mmw3YK9bmO/5N2qyINouK4RFt0f7AsUVP+Zl0YKCewfZhAWmBg5plpRGseI2wSmKg",
+	"Gnr1UrUyhgSxzAAnXKpWmpo1/DF6xl5xJQYs3c2dwwUDLRTcW1gicj0S1Vq0xbqC2A7YwHDqVb9UXg6q",
+	"Za/pTDl192H8F0jK0Ks3x5o5/8BtNNxV+PuzcFVRn9OyUp8dqTwTKXw73kAaNCGB4O7vvXIIL5tz/bJX",
+	"Q92VTwI/RGt4ipzOgSn2UWs8UzRYDq+xLtvPHG3Dc7n8ibU1CBIkcDAL2T4wpmkpBpxt65SbZk0N3Spe",
+	"qtyaIxfAjIs5bR0WHW3EdLMP1Iu/BvKhPdgwoqfRhtCRRvQl/rMNz2YJejxajmkn/scw0SxYWEdLOEDJ",
+	"rQctPyzVq37QGDXalcD3Vq/gk48ts7VScUOvUnJDZeLw4URYrXu62aPg4WyrHoHjt2o1x4g2ga82yQRm",
+	"O6oceVbMWB7ArgdoLHfYnsSFyUl1aBzZ8emyHdPKbDVMwAXzjpsoOZMn0+bRqMfT3FaJ+V6783dyaHWh",
+	"2Wzp9MD3bJuTKgqhV8RKrJ3asEmDfceVFbfahNboEtlGTzi1o5/FdxfUXA806yDaMJxyUPGc4pIfbRrO",
+	"lYWrpcVPLs1/Urq6eKN0Zf6GY0T/JdoQEg8tUlqRA9LcqVebzap/n39k0SDXPlmYmy/N/fbi1Y/nLzmo",
+	"C7nCAvdnyyBGIs5LmMYC2og2+Odr8eTl9eNYqqoB/ZpmNVjRWJwDmz8HD6NhU6s+8BqrpYZbqbaapTqM",
+	"kJaxllmpNkOQm3nfH0Zv4bOC3jLf1r1m072vI47/imJ4gFbCjoECaBd2GDT1XrSVK99k/8hkf0LpPWB9",
+	"lO6gq9ejb3TTTJ28srSqH56dMS3NRiikoVnEj2QiRN/Af8lejJ7w2ZLrDHYHSNseN7za+HQf+R3sRLbP",
+	"9lNqaNJgfxHPwwOGJMa56Fjykey5BIJxSeX3DKCy6DnbLuKbhR0AQ9P0cFv30bbkE+ySmQkiH00MsI6I",
+	"IMfYIN/7vLTSqJa9ZIvG+tXDsBSseH7JzVF07DXbZm3alpQkBbLZRYYSchQZiqjGuTV/9eZ8ae7y4vX5",
+	"S45pjSnyg1rlCMuITbbDGHi5rNL0HniNarg6iumR4a+Lh9MyHMWGNNhQmT3HZYzOH+KuY7TODlDWgqOD",
+	"1A6GdCct01SJbnzgVIJyc+rS/PWFj69O1iuO8fbfCx+Sy8J+Zts4NI0Gp0fkjIdM3IESFozWDaLcjnh1",
+	"FwWv8nAsP4DYJ5f8JZ/9bzL5B+xV9DXr0Sr2hFCOvklN3jIk5iC76SlaRt+QKH8NvhLaSAMDGbZLjDPg",
+	"6i1aizajpzDR4pLvzF385EbpysI/zF8qIS1ed+h1PXJ7UGfhsEJqAOw2Y8+Kx2RPZY9TfS+NidKepYFR",
+	"cLnWWVfwDs1voGEiC8cjpQgyBjd4EG3wLe8azhTAqVMP3FoV+MZZ8vnDKCroKMSevYqewcYKPzHx4xZu",
+	"zF8p3bx68dbFhcsXf3N53rTMxWs3Fhavpj5UVK1pmTILx3+CKr84Nzd/7cbC1Y9hpJs3SosflS7NX164",
+	"Nf/JP5b+afEqjJXR/aZlZk5E60vGVqieH2JdnbX2NF6iRd5vymUbsAN+fqwnNN5m9LViQRzZ5G6W3Adu",
+	"lVt7Wg9I5wYSxe0SVwIxSM4A66XWqrFcDK5L9oAPNtkO6aCO0EwHE1wnbyRzvhsENc/1yTrwW6XDGBtC",
+	"eEoWwL+xNuLUYJCvcU6ZYG22zX5Gbl9nu6ynG4vk8fhuynWv5pVDr7KIvxvi+MaTKwz3dS0zDEK3diS3",
+	"xq+GaYXl1mqL98zi7fHHuZNBwv4nEWFa3ETrRrRJ8D/SSJq4oycJce9YBvnSKH7AHP4KMB4gdb3DoRAB",
+	"P2LaS8061T1LkX1ypnla72oQ3gKZJtDAsbdN/OCx9SjNn6BID+nswk+yBJTeHBo4u5TssX0ffYF8uh9r",
+	"DGEnodojRwoQOQQLeyC8hY85abAfZQ2vqnVElTYM9jPoDFKB5B6l9INFomEXR0dQIdrk6qEfbbKfiag6",
+	"BFKltTt8wt6Q/8faiDXSad2i4as50ZQeArFgSr9JCSpJow+ir1iPvYIXwVITg/uADSS7us8/MsAMR3pt",
+	"x9bFvoSJWEt+WnVKi8YhBH4qlKKBr+AIbbSev9kUL+RamzRtopPbZNn8wGGHdkoRsTa5qNzPrTZLeDZF",
+	"455ba3oOQQ30W1yRQ9R1+45ThLfE5BNtgflPODVaQWj8EPX0UhOGLSN42GDfK+Zb1k5oi6nRqagWySBD",
+	"PWDcsB63luKJb0bPU5itQR5PFzYOrMZ1boEICfwo8YjvebGsnJ6ZBSRObJJZxE2yYla+LbxvnQkTqyvT",
+	"nj4/a9u2PWHb9umJc/Cv8/xP+t+0PWMqDjJoKzisXeJDPJVXBCkg16JbaEpec76Dm3gL5t1aUP6UlFo8",
+	"8bRNdahZT5sax+5MwbZtjac0cwY/l+ZTDvx71UYdRbI0JZ1plvHKp3EKGce7UEi/JFn0HT1KeO48/oTU",
+	"hfrVbAHPP8H5lE2Z1m2KbU+DVFJFv462DqPFEwLMAI3EtpYBJiWSCtmW4JI8wRDTFhreiROSwdjArRD7",
+	"VTTEdjlaO+zkdNjxEVvdgR3m9zJ6e0j0NKOA+fFoF6WdqZWvtS1zruG5oTciVPGt4jCk9Xq0Bf5GtEli",
+	"FSToG7C4eagK1dEbBJP7IsrVE54rqqZtrk/W0NxH2ZtxONxy2VsRVld52fXve00lnsOlZQYKEwBXN9pI",
+	"kWP0LEWOkohwJg32As2UXUhZ4Qk1hJmrY3AntAcK+QvwODAMu89ht3Xx/ug5eTekCrLEXg7qdR5WVkI3",
+	"g/TWgRU7bXPwDiK6o6M5Fgat3XJYWlkO/JSr8rfnZmdnhTDR/FSIk1H0fok/dy2o+mGGauNR0nPRkaQ6",
+	"VJYa/8C2KY6URhNJdwHRAX1ukwmC3+4TPMGtqT4dVwbANBDW5VHnbEYR62bJslJpeM1m6tj+ArNiu2Br",
+	"WUBHCKtEX5F99D1MLXpGCtcyZmzdrtdclRQgfen02WlLk1CTypmxMAen+CiVr3OmMMZvU4cmFmfxBCkY",
+	"WHdeKvaXVRuxmDcA3xURkl00LA5AcBhvf+ImBULNQOhv9y4YjsyQOVbsNhrcmGuw5JMpK3E8BbRktnR0",
+	"giRBuTKyjfVU+EishQhZzE6L3Vzx/JaGev8CA0fP0+YmxvajdfYapA07QIOc0BEUvWzAYXKDx9XRCIZJ",
+	"R1uaQHDZDb37QaN6CP0J052jn63qVOgwFTZcZcW/tOR56ShJmUNeAh1a9AaPEz/n8UoJ/UFmRzAYNija",
+	"Yttsl2+elBWm7pf3MPQavlsrVQ+ZzgWgEmFJaOF09QleiWwou+HEsltedldajaoWMnsXwWzY17xg9mj0",
+	"Svf+laBZFT5w/MsxUicqpqVsdgytxAOKteXRx3hwqEwd2qQUrhSE/9jjuVS7pLy5XkFO7NO/NYkHyhSU",
+	"Hfzv+MoBAfDkQ4tgAFnBGGXbizbZ62gTyMQyoi22E31Jr+9RbKAHqj96yv19NCMoZLCvO5IUDSezWX4w",
+	"kaPcTwTG5W6BFofVYK55PJK1iU4eVy3dbwStlfH5hlDVj+FHOtZJYZ3juwOfe9X7y2HpfsOtq7bDzBk7",
+	"1yE4Ak8pGKUWlRQ7ouW2ZM6aIDOBVlIc7ACQO2SwJ5MG+5abyRyIpZPuAt7UMS5eW+AgDeFDSuDpSwRs",
+	"0NOQR+1NKunc5HpnwqExsm3rkO3FlRzY7nsyFg2eINFD7G0jV3Kg1JAi1Ns8Moa8viuAue4oLZPm0Anv",
+	"YdhwJ8rLntf0TpBdx+KsbyndJ0kCeBataQU/0lTFq4VubgLCd/l7kgLxL9Ae/0zG3KvoGTk5A0yOh2fi",
+	"vNcYhornPKsngWNyi7yy1FbqeESWEJp0ktiYa+cR04B1igbKrYQHVDKkyDZtU58NpDiHcKZhOGCRo5Lc",
+	"MWhNys9UnQ594oqvfVjLrFoaHcRUdSLRs7yo2dg0I69I3YzhYR/EWzQEE3tB+ZmU6eoYObNWWA9c06J/",
+	"EJcBxWnNA9bROAyQsVpKEkhH5vTBdta8EWmMY4ySQiayTyBAdbhkyRgDlfzz/IeOCJR6JCdaodfU26Pp",
+	"1EoOiOUnEZEh2o+2wMiTsq+U6pszow2Ed+RFUC3OO8qJ5RiEJlMe6J7SBDDMEmM2bJ8SdvqUNBytiXQr",
+	"AhXZNocUd4WZHydAttV0vZcThbP2rH12wrZnClqdV3PLx6TzZuiGrfF2+Do9CntcrXu1qq9LnfhzwuC0",
+	"YqmIARUGWuMczPoZiGuPu7DtjDDgVR599FDWoi9AYkDKjpxvP+as5x94fqgjj3cJoI9INx7mPgBQQCEu",
+	"c6w8ZE6lloxpSG+Lz3loxrJW9OQg9xlJlhaZioCUSCZX6+T4zz+iJXsQfcVzOCWl0tZk5+dEAfqIr3R4",
+	"5BDz4kSYWhg5CrAVPcvGrjHCu8tjsvQ+WYRuY1pQVwpC6RPb2XYsSWkK0aYuozlR60nGTxpvjtYQ4YcQ",
+	"x57GeSVe61AwuQfeTi8PMALnSBLskMCSJOCxjnFt8bppZay049hn/38lMx3Z49ZkQZ1Y5tMY+UMZKsvx",
+	"0SnBSJ5HLh9frmpDdT/KdcXoqkqmoFxLpzUDj2AQaDHFpKr8CAUfufCfrB61KxdaLZ25/icMBD1NyolQ",
+	"74FbhllHz1HiGc7cb+fnfucY5G71AIrnKUk9w4HEBMoKaDo80kCI3FciRSIRmiJetEPInybt+OzktBpX",
+	"4EIcDsRdhUhg6Z5brdEHaH2YFo+B4j/LQcCjEA3PrawmikKEJrhtjg/8HpkKqXAFN9ni5j6Mr4tcZBT6",
+	"EMRkWPkkhoU32EA1fEmA4GlgbLhHRfGiHlO2etMx4DBolEJe3jmMMJM60CM6EPcaQb2U2GzjpeMp1tud",
+	"tFGIVD62dxUGpSOYjClOSgax5M1TtkTHZ1IiYvrYk8Q1ikZ98tGcMTtz5pzxgZNXDu1Aij1l73d5TRSl",
+	"ivMI61doEAjVza2OPjIm6N12UeGzrP2PCV1WHBwbxMBKNhEOkRN8HYYHl3y5wqdHKOUOT5emjHReGU2p",
+	"gD2eJuhUvNCt1pxhFVKJ/kxSxT9avHn1kt5fhfG0XmrVp6oodcwpd6U69WB6Cm3P5tQYmUKz5lCvJEGg",
+	"7RmtaqyGtdQc2J9UQ4iK59UKep1dLT5Q0KgwXGkWp6Y+rYblZc+fdB9Uw2Cy0ZryGo2g0aR1TvhBOHEP",
+	"WwTINYi6OFqaEYjsaRGSkY6HpeOA657bKC/nmMrfSevjgVle30TYnQLPZK1TrO2Q6bQbg8mvRfkZ0Hhe",
+	"UHe1dLSQnVpflwTtCjP2WJDCSFT5yAV6J2FrHtkyPIJnWW1SnZgffK7fiXfjgMamo+R8JvuYckRVYhkR",
+	"C8ouK58pPvGamHA12vIEabuNC+4ZPB+GWlZIPSSwL4SuwORQhqjEru/PGk15K6P7I+zkxABSMZHMXmCI",
+	"rvRrCP4crrZQGyo6ZvgmmcGQuI3utG5izf3oxhzf8QYq3ZxGG6PbgKmH91m4mvOWpJkLx31TeUtSASnl",
+	"ViZIS5J461yavzx/Y94xj97OIq+JBS90wD0bKzVUVmsU9aUYb2aTRO6+9LRUlIFFD0llGNvV7OrRsxKz",
+	"ywTZdwkNsEPY+vir66163W2saupvPg8an5aWg1ZjfBn290Hj09/CLxb80Gs8cGsjw1LSS8apx3nJDeo4",
+	"KyUDZBUxFK8U1vAMpwMuqKlIE7qwrfMESf6VAPySDj/Rs3h3x4UqduXWQZoZYvz3OHoidWrvS1Mor9UH",
+	"/VJ2tLrpmZ0pYlFt9CI5Jc47Ij8wOWccTFLFuTmspdB7GA5NZP0B6nD4ae1SfegmCsgv4evCGZ0OcB/c",
+	"L600vBU5UpbEsrSB3+PG5bTtJpLMEdvWv1WxjrOJh+lUYGrxIeAPti3EYPSEFIeSgXzBoCYtculE5iGp",
+	"cnkPzcHDm+jjmwgIJUEtC0FaI7K6dhGn7vPYWhwY6GGFLS8kf0FJ7/A3a0eb7E20aXwQrQv4H55hO8aV",
+	"cx/mFHsoJnXO/id9g0gTa2QQZNZ2IIbQ5iAfhsSx0Q3EtMbNPdMlYGP/yKMmYJ8f66dJ6dExIqnHdDsO",
+	"0wkj0/biQrZXDvQpkDO8YhaA82A7dFT0s100HDZwVkeMs9Za91PQgsi2nahOPKj6gW7BMPo/Z0oj5lsg",
+	"J6euBM1y8Pl48UF8fWyZKpJVzqKX3qiSvp45c+kiJ5KYlYAaQaxTVFkbZAjyG0eMqYJXUf1xUmAfyaOb",
+	"NH3c5k0skDi2Mbaf9XjKtaDpNfXUp2D5SYgQ6iu6vKMhTaXDwRkHdhcGcwzuf7aVHrJ8zhR4pC6IRkzA",
+	"g+gpVjYmVFE4XbRtxOlDiOmYRfM/fXDbnr5z256YvfOfC7ftidN3PizetifO0Ed/o3ekPF+sLxl62j6B",
+	"oT/3vE8rrsbOsJMM3XjvMa+ux3Yt4yx92yGNT/U1tLGsKzsXZ4cnWaZNVD4ZacWWdLpZGgQW9sotqCS5",
+	"DtKN6AEaWR6lX/OI/CksrO7E0bE3ItozabA/Ch9kW+iMVCQaq5Hbxt/9/Q2D/YEAO5B0DvSJLFWh5+Yr",
+	"zKZ4QY9TJKhcc6v1JsHG2PR12XMrXkNIjKIZ9+xMTtZdqf7OW6UWoVX/XqAVyEmFOwJkAhbvYyQGN2MP",
+	"wzI8Zs87hCiNOjO2tpUGbXbkVp4C8kw37MTYmNyxk0rEX/LWzV3RmyxuT6PMlFeMO9cWr98wUuX8UNCd",
+	"tErssG7MxU7Bth0Mv8lm84DtL/n8FEU1e1Jhrq3GH7CdYh7lfEM9cPbAO2J9MH1JlFDCqgG+DLrpcbnA",
+	"kn/qFPzk1CmCxH/GocB715U7WYbc86Qt+qAoDer6SLcvoo1DBD0wzNLDcoNutJERyoR0pOIekwYvtaHu",
+	"d3gimtZJdLJ/gCLEDBPG8MiVW9c4DlAckhcxhF3TbYpYh8gr6Xa7y7pLvtzu9gNIuoXdiL7mxNy1dCuY",
+	"nobQ1L/hM9uwzWB+GOhJdQ1hbPI+tbnz6/FGD6yfBJPQXUp1ZIhliMinQdEhaH+NWjxks154wSiFX8xE",
+	"1Eyyl7FRDgd0rXW3Vi1Daj3iuY0myYbpSXvSFhrHXamaRfP0pD15mrTMMkpX5DOOqnghGkGgjDGSB1LX",
+	"nKt5bgP7f6Y6ShfsmTFagoruEDCNGXs6z5qNR55Sei6jShC+M0Qgn/KUBl4Qq7RegK1y7zcxog7zvfPY",
+	"Mu97o/uWYvPMvBOOq9njWqFOtIXn2afkdv6EdNCyg/F8yf8gl/jGbJ3BBZzhCOi/aJBDCR2UiWicGXuG",
+	"RyTV0/vYC/VnZw/pZ324PtY4vq6JtbLLJ3L+qXNb1/ZGkdLOeMfYFFU8tojqp2LYaCXQN+lV65mQ2bdR",
+	"0r8WYYxsPhgxsdQxTe5utY9k9hRBHKkDusHRzj7Kd+y9tuSLcmZqgqXp4ia0RhLjjtbFiMAglsEj5l8L",
+	"TbWXbqC1ueRn3fSb5z/UkZLU2pp3pvea4W+CyuqJUZKmeXZec/RxemJ3xm5Rnem0//gX5xcOtmDeRLb/",
+	"XrRF/GSP5iep8f/RWBB+NDP6R3EHf/zB7CHa5Uu9cXhjlgytm0mahMn+qNCwHIHn1ZZvfxoGerzd4/nR",
+	"Q5XJfzTl9Is450KSG0kGxYw9K2npodMbJT4S039UVgTMZKJefehVJigRxHxsndDNA4eVeWkx/W26sb1c",
+	"GPo82+d+lIieepRcpfN4mK1yCT+XpJR8+09OUCd5ZEq6HQhCKL8iCZCOAb4vVlbP9V/5JHSnqjO+Vtyw",
+	"vJw9JTUae/xTOnlFpI8X6+83OUTE+NeuZpJkzF+/klEp88/xzBNZnj6MIVJGwAxDbMGXGFMAF31bjVBj",
+	"27ycTN8C70PXicudT53KNAE8dYrgiG25fSD07c0DNiQgY1LbUetQrVasJf+QvVbyGjeRwhjVhWXJP1Ib",
+	"FgAb8lv/KKG4jjB3aafZK3LY5GLiotSjL67l7qbuJhFtm5b8pDVQ5sW9TMtzDhbJj+nMaTnD4h3Z07ok",
+	"Dp1EyN9YOWY5YH0BjyjXAgEgpvbZNN+1XJPacObc6wQRSDhsykhP55T03p9gU+WU1PRYa3VKhKxjBLr2",
+	"RSPFkkAuBzxUWoMcjEURTkpp29Te/Q/Wo33juJyS1R9tXlCK0bGqkjtRW8IoaPP+KsD8a1R4UEOznqJ2",
+	"upvj4pzchAQOW3yoy+hohqtokkM0EfN0RlkWlPwxxpN0y987NRKTOh8diQ+v9DkRWk1VmSq1Q8PuwhDk",
+	"yWnyDjUM0taR6JoEE0y8Dy+IoeU45J8Gf6Hx70LFq68EoeeXVyd+5606RYUusUoextnH1KYlP75IktpG",
+	"U5M92EuASVDXnTolNRk+dYpeygvzexyOUwJJTsGehgjFX+E5kKFyQiUXjbtUN7RGbAFJ5BgCp+7kvF3g",
+	"ABtcUUmSmD+NkcxAiybaH5KG/G9CVqfaKhMsBWUUmLPxKt3cMMI+tmpzw01LavZLYYCZQsExFFhK3C4A",
+	"BQ63Ll5euOTEjeRpv/NNlyR9ie5OaBP2lY77aDSn1LVypDj7VwpxSvjgjiEogOjkAJMOdrWWB8JLr/Hf",
+	"JLHXkkhKrO+UAPG5e9Pls3fPFibO3ptxJ2bcc/cmZt2CN1FwT9+zy9OVGe/M3bz4X4qQh17/KHV9nIb0",
+	"knrVF3+fzyYrvCM3SdM+dKh5YSWxEh7w6OXakqo/Aqg7lAo9IXMS8cr36k3xasccwEQva7KiKe54xIWL",
+	"xNggsgv29HuYcNJmJBE5rP/+LKLDwoPHx7ReCn7P0S38oqLYuI3W0+oNTN/1BAjrUSN66k2xr0D5PNJR",
+	"KJz4CnW3BYzw73nLe1pJtCVLOLQ+s/E15Wu1HjOj1xPDc+oRv1T3ca4J+rEX5kjsEaaWuAT43Rtbw7nl",
+	"lwE2tHnb4nJIEjdQj7aP/jWZHPvjntUUFQIPAT2+F9dSxncioCD/SlwtJ6ACbRuGvrjygUBDuadNUYad",
+	"HKxidlLVxEt+zFXd2DKTakHbmoprK76KqSN6igFu2hUxtYztkjR/n7t4dW7+MnbUdzSZqzchYKszRZK7",
+	"Po9J2O9AO2fvIdXqr9ybSM3HvyzHyZN5wfrviwGPH77SkpUSwpLW2FHr5rsGsgOFqLJcJXQUpSJIJaPE",
+	"YXGkSR+94hIgqRietu2cuwWEcMiLcv1JamNCU0opmg0ZkB0/rIVTxGJfmkCNX9pwAmbAIaec0Y3K10fQ",
+	"jVMe9FOQUZpU1j2kCtNDE82w4bl1p0hO4hpZxwY4cOgmoeWGHROFrG3H+WPk4wxrzTC55LM/UnLWAacg",
+	"bLkTp27LKQuD2LKh/nJKRxFNNylqTA/fGw4/5Al3pepc4HlU2/QmanX9hvLutEmWtCrn8sL1G/NXp64u",
+	"3lj46B9FScKoxCmCbXW+8nnuKv+VrDf5prHXbKBsLE+u+rvri1dhoU/4vQFOukOG1km9jgeIj87Tsb9D",
+	"wydDOKocTtxTfKZoEEsv+RU3dIvGoyW55cWSWVzibUeWTGsp6SOBX4g2JPhV0lYCv8MwNH6RtJjALwp2",
+	"4eyEPTthn70xXSieni7a5/5pyXws34YQu6paB4uTqEL1O7+MQSbPJk37sm32wfXr8x/mSYYmliznCoL8",
+	"6/8hl4csG9FzQEplzWiLuPVGnw2S/EQ0GwH4Wef5wvtG3MKcboXFOI3F82fxcvk293QoZYJC0mtplD1p",
+	"PQfcdDCpZAwf8DRZ0VoHX9bGdghqruTbn6IncvLG2z3KtpayQN/+NF6rgLd7WlOuwEXAd7hXUq9vyhFK",
+	"FfnyWyxF19V1CoqJ2BDPkJCq3elABpT5yHblRzt4LG8wtcuRa7XFpVhaQRKXt48G738Q+x3fYiy7pgpQ",
+	"pW6yqcflPxsbg7JtBYMqaApmRoPqbjgW9o7dwXQXH1MBUSo1QdxFI5Umq7VHSZ1yn2c3POXBet2WBH5t",
+	"VWmfkOxH+jqadGHZ/2sRCKXlgz75QeqFQsyTGKBHwZNUUfvj6AIE/ExcMruvSU1SvGEudkkG86SpXBms",
+	"3EGYqY9AIfpFEiujXFO8TjhV2cmv8dNnF+dFqKNnxSU/CVH3eD297toa3VU1/C74lHgTPjM2NOSBSHDe",
+	"HVH+qpU/EIK6RXt1WAvmeAz9g6o81PaS2jtUhgg41hsi4vJFmkaIpWb5V7m4kVdEohR6xrqqoImvIDqh",
+	"ulWtdEpqCQ8nl1KeSEwRpLO7iKQgjlLDUrqe4dQC37lgpGh0WE6z7Ui1T6l5N4NGqJ+zKKcUvfLEzMRv",
+	"7xxF0/yqxGzSJWGsQG+qG8AJyNmXI2rBlJSD0K0F9xUROvUI/zsC/MVVHlqC3KKR38MBiCYgecCBYli/",
+	"G1g3kwg81qZP1flVU0N3Hu+jOvLua4Uz3TzP6xmEFMt0yNFeAdNXrmRSLWq4E9dwwNZ0qId1Tzgi5AFA",
+	"oomRZ0CLABvG4Sn9eE0gm9JdEwfJbVB0uezbn/g19bxzsPDlkltOQY9SpV47jtcfUNqLSDdL+sCRFCej",
+	"JF/oVf1yrVXxSi3/iPbku2QKJBgdM/ArzI7NAvlXoQ296kzDFFLZMFK1KBi+fQd2qOk1HuS4Sy/lKlkp",
+	"oo/waatRS5BTFED81aNauFAWpLiEKjluMWO97zLK0k3G4VasZphUZi9e0fpCkwwiz6kR6kbSZ+ZAzJru",
+	"yurGXc1gRNg7Bf1IXsBhj8d3Hv/fAQA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
