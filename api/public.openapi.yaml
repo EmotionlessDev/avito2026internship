@@ -159,6 +159,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Cart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     delete:
       tags: [cart]
       operationId: clearCart
@@ -166,6 +167,7 @@ paths:
       responses:
         '204':
           description: Корзина пуста
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /cart/items:
     post:
@@ -188,6 +190,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Cart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -222,6 +225,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Cart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
@@ -236,6 +240,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Cart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /cart/validate:
@@ -263,6 +268,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CartValidation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /orders:
@@ -287,6 +293,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OrderList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [orders]
       operationId: createOrder
@@ -322,6 +329,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409':
           description: Ключ идемпотентности уже использован с другим телом запроса
@@ -347,6 +355,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /orders/{orderId}/cancel:
@@ -372,6 +381,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Заказ уже нельзя отменить
@@ -410,6 +420,7 @@ paths:
                 example: |
                   event: status
                   data: {"from_status":"placed","to_status":"accepted","actor_type":"venue","created_at":"2026-09-06T12:31:07Z"}
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
 components:
@@ -472,6 +483,14 @@ components:
           schema: { $ref: '#/components/schemas/Problem' }
     NotFound:
       description: Ресурс не найден
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: |
+        Пользователь не опознан: заголовок `X-User-Id` отсутствует или
+        не резолвится в известного пользователя. Каталог и поиск работают
+        анонимно, корзина и заказы — нет.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -824,6 +843,10 @@ components:
       description: |
         Диагноз корзины, а не ошибка. Суммы посчитаны по актуальным ценам,
         поэтому клиент показывает итог и список проблем из одного ответа.
+
+        Пустая корзина — это `is_valid: false` с пустым `issues[]`: оформлять
+        нечего, но и проблемы нет. Отдельного кода на это не заведено — клиент
+        видит пустую корзину и без нас.
       required: [is_valid, items_amount_minor, total_amount_minor, issues]
       properties:
         is_valid:
@@ -859,7 +882,7 @@ components:
           - code: MIN_ORDER_NOT_MET
             severity: blocking
             min_order_minor: 100000
-            missing_minor: 7100
+            missing_minor: 22000
 
     CartIssue:
       type: object
@@ -885,7 +908,9 @@ components:
         missing_minor:
           type: integer
           format: int64
-          description: Сколько не хватает до минимальной суммы заказа
+          description: |
+            Сколько не хватает до минимальной суммы заказа. Минимум считается
+            от стоимости блюд: доставка не помогает его набрать.
         next_open_at:
           type: string
           format: date-time
@@ -896,8 +921,13 @@ components:
     CartIssueCode:
       type: string
       description: |
-        Полный список кодов каскада валидации (`docs/DESIGN.md` §2). Каждый код —
+        Полный список кодов проблем корзины (`docs/DESIGN.md` §2). Каждый код —
         отдельная ветка в коде и отдельный тест.
+
+        Это общий словарь проблем, а не перечень того, что умеет одна ручка:
+        `CART_MIXED_VENUES` приходит только с `409` при добавлении позиции —
+        в корзине всегда одно заведение, поэтому в ответе `/cart/validate`
+        этого кода не бывает.
       enum:
         - ITEM_UNAVAILABLE
         - OPTION_UNAVAILABLE

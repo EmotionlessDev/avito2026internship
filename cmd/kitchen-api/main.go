@@ -13,6 +13,7 @@ import (
 
 	"github.com/emotionlessdev/avito-kitchen/internal/api/merchantapi"
 	"github.com/emotionlessdev/avito-kitchen/internal/api/publicapi"
+	"github.com/emotionlessdev/avito-kitchen/internal/cart"
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
 	"github.com/emotionlessdev/avito-kitchen/internal/config"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
@@ -63,8 +64,11 @@ func run() error {
 	// расписание живёт там, а витрина search_items его не хранит.
 	catalogService := catalog.NewService(catalog.NewRepository(pool))
 	searchService := search.NewService(search.NewRepository(pool), catalogService)
+	// Корзине нужен каталог: состояние заведения для каскада валидации
+	// берётся оттуда, где живут расписание и геометрия.
+	cartService := cart.NewService(cart.NewRepository(pool), catalogService)
 
-	if err := publicapi.Mount(router, publicapi.New(catalogService, searchService)); err != nil {
+	if err := publicapi.Mount(router, publicapi.New(catalogService, searchService, cartService)); err != nil {
 		return err
 	}
 

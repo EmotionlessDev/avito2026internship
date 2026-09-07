@@ -1,6 +1,7 @@
 package publicapi
 
 import (
+	"github.com/emotionlessdev/avito-kitchen/internal/cart"
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
 	"github.com/emotionlessdev/avito-kitchen/internal/gen/public"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
@@ -152,4 +153,103 @@ func nextCursor(cursor string) *string {
 	}
 
 	return &cursor
+}
+
+func cartResponse(current cart.Cart) public.Cart {
+	lines := make([]public.CartItem, 0, len(current.Lines))
+	for i := range current.Lines {
+		lines = append(lines, cartLine(current.Lines[i]))
+	}
+
+	response := public.Cart{
+		Id:               current.ID,
+		VenueId:          current.VenueID,
+		Items:            lines,
+		ItemsAmountMinor: current.ItemsAmountMinor(),
+		UpdatedAt:        &current.UpdatedAt,
+	}
+
+	if current.VenueName != "" {
+		name := current.VenueName
+		response.VenueName = &name
+	}
+
+	return response
+}
+
+func cartLine(line cart.Line) public.CartItem {
+	options := make([]public.SelectedOption, 0, len(line.Options))
+	for i := range line.Options {
+		option := line.Options[i]
+		available := option.IsAvailable
+		groupID := option.GroupID
+
+		options = append(options, public.SelectedOption{
+			OptionId:        option.OptionID,
+			GroupId:         &groupID,
+			Name:            option.Name,
+			PriceDeltaMinor: option.PriceDeltaMinor,
+			IsAvailable:     &available,
+		})
+	}
+
+	return public.CartItem{
+		Id:             line.ID,
+		MenuItemId:     line.MenuItemID,
+		Name:           line.Name,
+		Qty:            line.Qty,
+		UnitPriceMinor: line.UnitPriceMinor,
+		TotalMinor:     line.TotalMinor(),
+		IsAvailable:    line.IsAvailable,
+		Options:        options,
+	}
+}
+
+func validationResponse(result cart.Result) public.CartValidation {
+	issues := make([]public.CartIssue, 0, len(result.Issues))
+	for i := range result.Issues {
+		issues = append(issues, cartIssue(result.Issues[i]))
+	}
+
+	return public.CartValidation{
+		IsValid:          result.IsValid,
+		VenueId:          result.VenueID,
+		ItemsAmountMinor: result.ItemsAmountMinor,
+		DeliveryFeeMinor: &result.DeliveryFeeMinor,
+		TotalAmountMinor: result.TotalAmountMinor,
+		Issues:           issues,
+	}
+}
+
+func cartIssue(issue cart.Issue) public.CartIssue {
+	converted := public.CartIssue{
+		Code:            public.CartIssueCode(issue.Code),
+		Severity:        public.IssueSeverity(issue.Severity),
+		ItemId:          issue.ItemID,
+		OptionId:        issue.OptionID,
+		OldPriceMinor:   issue.OldPriceMinor,
+		NewPriceMinor:   issue.NewPriceMinor,
+		MinOrderMinor:   issue.MinOrderMinor,
+		MissingMinor:    issue.MissingMinor,
+		NextOpenAt:      issue.NextOpenAt,
+		DistanceM:       issue.DistanceM,
+		DeliveryRadiusM: issue.DeliveryRadiusM,
+	}
+
+	if issue.Message != "" {
+		message := issue.Message
+		converted.Message = &message
+	}
+
+	if issue.ItemName != "" {
+		name := issue.ItemName
+		converted.ItemName = &name
+	}
+
+	if issue.OptionName != "" {
+		name := issue.OptionName
+		converted.OptionName = &name
+	}
+
+	return converted
 }
