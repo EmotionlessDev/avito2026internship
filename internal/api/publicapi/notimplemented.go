@@ -8,7 +8,8 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 )
 
-// Ручки заказов появляются на этапах 6–7. До тех пор они честно отвечают 501,
+// Отмена заказа и живой поток статусов — это сигналы workflow, поэтому они
+// появятся вместе с Temporal. До тех пор ручки честно отвечают 501,
 // а не молчат и не падают: контракт опубликован целиком, и клиент должен
 // видеть разницу между «ручки нет» и «ручка ещё не готова».
 //
@@ -28,39 +29,12 @@ func (n notImplemented) write(w http.ResponseWriter) error {
 	))
 }
 
-const stageOrders = "6–7 (заказы, outbox и Temporal)"
-
-func (n notImplemented) VisitListOrdersResponse(w http.ResponseWriter) error { return n.write(w) }
-
-func (n notImplemented) VisitCreateOrderResponse(w http.ResponseWriter) error { return n.write(w) }
-
-func (n notImplemented) VisitGetOrderResponse(w http.ResponseWriter) error { return n.write(w) }
+const stageOrders = "7 (Temporal: сигналы, таймеры и компенсации)"
 
 func (n notImplemented) VisitCancelOrderResponse(w http.ResponseWriter) error { return n.write(w) }
 
 func (n notImplemented) VisitStreamOrderEventsResponse(w http.ResponseWriter) error {
 	return n.write(w)
-}
-
-// ListOrders — этап 6.
-func (h *Handler) ListOrders(
-	_ context.Context, _ public.ListOrdersRequestObject,
-) (public.ListOrdersResponseObject, error) {
-	return notImplemented{stage: stageOrders}, nil
-}
-
-// CreateOrder — этап 6.
-func (h *Handler) CreateOrder(
-	_ context.Context, _ public.CreateOrderRequestObject,
-) (public.CreateOrderResponseObject, error) {
-	return notImplemented{stage: stageOrders}, nil
-}
-
-// GetOrder — этап 6.
-func (h *Handler) GetOrder(
-	_ context.Context, _ public.GetOrderRequestObject,
-) (public.GetOrderResponseObject, error) {
-	return notImplemented{stage: stageOrders}, nil
 }
 
 // CancelOrder — этап 7.

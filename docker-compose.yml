@@ -23,6 +23,9 @@ x-app-env: &app-env
   # Внутри сети compose база всегда на postgres:5432 — проброшенный
   # на хост порт здесь ни при чём.
   POSTGRES_DSN: postgres://${POSTGRES_USER:-kitchen}:${POSTGRES_PASSWORD:-kitchen}@postgres:5432/${POSTGRES_DB:-kitchen}?sslmode=disable
+  # Внутри сети compose брокер доступен по внутреннему listener'у; внешний
+  # (localhost:9094) существует только для консольных утилит с хоста.
+  KAFKA_BROKERS: kafka:9092
 
 services:
   postgres:

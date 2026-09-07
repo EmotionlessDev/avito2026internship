@@ -4,6 +4,7 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/cart"
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
 	"github.com/emotionlessdev/avito-kitchen/internal/gen/public"
+	"github.com/emotionlessdev/avito-kitchen/internal/order"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
 )
 
@@ -252,4 +253,74 @@ func cartIssue(issue cart.Issue) public.CartIssue {
 	}
 
 	return converted
+}
+
+func orderResponse(current order.Order) public.Order {
+	items := make([]public.OrderItem, 0, len(current.Items))
+	for i := range current.Items {
+		items = append(items, orderItem(current.Items[i]))
+	}
+
+	timeline := make([]public.OrderStatusEvent, 0, len(current.Timeline))
+	for i := range current.Timeline {
+		timeline = append(timeline, statusEvent(current.Timeline[i]))
+	}
+
+	return public.Order{
+		Id:               current.ID,
+		Number:           current.Number,
+		VenueId:          current.VenueID,
+		VenueName:        current.VenueName,
+		Status:           public.OrderStatus(current.Status),
+		Items:            items,
+		ItemsAmountMinor: current.ItemsAmountMinor,
+		DeliveryFeeMinor: current.DeliveryFeeMinor,
+		TotalAmountMinor: current.TotalAmountMinor,
+		DeliveryAddress:  current.DeliveryAddress,
+		ContactPhone:     current.ContactPhone,
+		EtaMinutes:       current.ETAMinutes,
+		CancelReason:     current.CancelReason,
+		CreatedAt:        current.CreatedAt,
+		PlacedAt:         current.PlacedAt,
+		CompletedAt:      current.CompletedAt,
+		Timeline:         timeline,
+	}
+}
+
+func orderItem(item order.Item) public.OrderItem {
+	options := make([]public.SelectedOption, 0, len(item.Options))
+	for i := range item.Options {
+		options = append(options, public.SelectedOption{
+			OptionId:        item.Options[i].OptionID,
+			Name:            item.Options[i].Name,
+			PriceDeltaMinor: item.Options[i].PriceDeltaMinor,
+		})
+	}
+
+	return public.OrderItem{
+		Id:             item.ID,
+		MenuItemId:     item.MenuItemID,
+		ExternalItemId: item.ExternalItemID,
+		Name:           item.Name,
+		PriceMinor:     item.PriceMinor,
+		Qty:            item.Qty,
+		TotalMinor:     item.TotalMinor,
+		Options:        &options,
+	}
+}
+
+func statusEvent(change order.StatusChange) public.OrderStatusEvent {
+	event := public.OrderStatusEvent{
+		ToStatus:  public.OrderStatus(change.ToStatus),
+		ActorType: public.ActorType(change.ActorType),
+		Reason:    change.Reason,
+		CreatedAt: change.CreatedAt,
+	}
+
+	if change.FromStatus != nil {
+		from := public.OrderStatus(*change.FromStatus)
+		event.FromStatus = &from
+	}
+
+	return event
 }

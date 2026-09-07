@@ -8,7 +8,8 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 )
 
-// Работа с заказами появляется вместе с самими заказами (этапы 6–7),
+// Переходы статусов заказа — сигналы workflow, поэтому они появляются
+// вместе с Temporal (этап 7),
 // витрина статистики — вместе с консьюмером Kafka (этап 8). До тех пор
 // ручки честно отвечают 501 и называют этап: заведение должно видеть
 // разницу между «ручки нет» и «ручка ещё не готова».
@@ -26,13 +27,9 @@ func (n notImplemented) write(w http.ResponseWriter) error {
 }
 
 const (
-	stageOrders = "6–7 (заказы, outbox и Temporal)"
+	stageOrders = "7 (Temporal: сигналы, таймеры и компенсации)"
 	stageStats  = "8 (витрина статистики из событий Kafka)"
 )
-
-func (n notImplemented) VisitListVenueOrdersResponse(w http.ResponseWriter) error { return n.write(w) }
-
-func (n notImplemented) VisitGetVenueOrderResponse(w http.ResponseWriter) error { return n.write(w) }
 
 func (n notImplemented) VisitAcceptOrderResponse(w http.ResponseWriter) error { return n.write(w) }
 
@@ -45,20 +42,6 @@ func (n notImplemented) VisitMarkOrderDeliveredResponse(w http.ResponseWriter) e
 }
 
 func (n notImplemented) VisitGetVenueStatsResponse(w http.ResponseWriter) error { return n.write(w) }
-
-// ListVenueOrders — этапы 6–7.
-func (h *Handler) ListVenueOrders(
-	_ context.Context, _ gen.ListVenueOrdersRequestObject,
-) (gen.ListVenueOrdersResponseObject, error) {
-	return notImplemented{stage: stageOrders}, nil
-}
-
-// GetVenueOrder — этапы 6–7.
-func (h *Handler) GetVenueOrder(
-	_ context.Context, _ gen.GetVenueOrderRequestObject,
-) (gen.GetVenueOrderResponseObject, error) {
-	return notImplemented{stage: stageOrders}, nil
-}
 
 // AcceptOrder — этап 7.
 func (h *Handler) AcceptOrder(

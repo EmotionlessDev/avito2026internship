@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -73,6 +74,32 @@ func (l *loader) oneOf(key, def string, allowed ...string) string {
 	return def
 }
 
+// list разбирает список через запятую: брокеров может быть несколько,
+// и переменная окружения — самый простой способ их перечислить.
+func (l *loader) list(key string, def []string) []string {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return def
+	}
+
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+
+	if len(values) == 0 {
+		l.fail(key, raw, errUnexpectedValue)
+
+		return def
+	}
+
+	return values
+}
+
 func (l *loader) err() error {
 	return errors.Join(l.errs...)
 }
@@ -91,6 +118,24 @@ func (l *loader) int32(key string, def int32) int32 {
 	}
 
 	return int32(v)
+}
+
+// int16 нужен фактору репликации: Kafka принимает именно int16, и приводить
+// его из int32 в месте использования значило бы прятать проверку диапазона.
+func (l *loader) int16(key string, def int16) int16 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return def
+	}
+
+	v, err := strconv.ParseInt(raw, 10, 16)
+	if err != nil {
+		l.fail(key, raw, err)
+
+		return def
+	}
+
+	return int16(v)
 }
 
 func (l *loader) boolean(key string, def bool) bool {

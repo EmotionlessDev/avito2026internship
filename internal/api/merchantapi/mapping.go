@@ -3,6 +3,7 @@ package merchantapi
 import (
 	"github.com/emotionlessdev/avito-kitchen/internal/gen/merchant"
 	domain "github.com/emotionlessdev/avito-kitchen/internal/merchant"
+	"github.com/emotionlessdev/avito-kitchen/internal/order"
 )
 
 // Перевод контракта в домен и обратно. Снапшот приходит с необязательными
@@ -185,4 +186,55 @@ func deref[T any](ptr *T, fallback T) T {
 	}
 
 	return *ptr
+}
+
+func merchantOrder(current order.Order) merchant.MerchantOrder {
+	items := make([]merchant.MerchantOrderItem, 0, len(current.Items))
+	for i := range current.Items {
+		items = append(items, merchantOrderItem(current.Items[i]))
+	}
+
+	response := merchant.MerchantOrder{
+		Id:               current.ID,
+		Number:           current.Number,
+		Status:           merchant.OrderStatus(current.Status),
+		Items:            items,
+		ItemsAmountMinor: current.ItemsAmountMinor,
+		DeliveryFeeMinor: &current.DeliveryFeeMinor,
+		TotalAmountMinor: current.TotalAmountMinor,
+		DeliveryAddress:  current.DeliveryAddress,
+		ContactPhone:     current.ContactPhone,
+		EtaMinutes:       current.ETAMinutes,
+		CancelReason:     current.CancelReason,
+		CreatedAt:        current.CreatedAt,
+		PlacedAt:         current.PlacedAt,
+	}
+
+	if current.Comment != "" {
+		comment := current.Comment
+		response.Comment = &comment
+	}
+
+	return response
+}
+
+func merchantOrderItem(item order.Item) merchant.MerchantOrderItem {
+	options := make([]merchant.MerchantOrderOption, 0, len(item.Options))
+	for i := range item.Options {
+		delta := item.Options[i].PriceDeltaMinor
+		options = append(options, merchant.MerchantOrderOption{
+			ExternalOptionId: item.Options[i].ExternalID,
+			Name:             item.Options[i].Name,
+			PriceDeltaMinor:  &delta,
+		})
+	}
+
+	return merchant.MerchantOrderItem{
+		ExternalItemId: item.ExternalItemID,
+		Name:           item.Name,
+		PriceMinor:     item.PriceMinor,
+		Qty:            item.Qty,
+		TotalMinor:     item.TotalMinor,
+		Options:        &options,
+	}
 }

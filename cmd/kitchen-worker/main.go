@@ -2,8 +2,8 @@
 // Kafka-консьюмеры и outbox-relay. Отдельный бинарь от kitchen-api потому,
 // что у них разный профиль нагрузки и разные причины падать (DESIGN.md §4.2).
 //
-// На этапе 0 воркер поднимает только health-сервер: Kafka подключается
-// на этапе 6, Temporal — на этапе 7.
+// Сейчас воркер держит outbox-relay и двух консьюмеров проекций
+// (витрина поиска и уведомления). Temporal-worker добавится на этапе 7.
 package main
 
 import (
@@ -16,8 +16,12 @@ import (
 
 	"github.com/emotionlessdev/avito-kitchen/internal/config"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
+	"github.com/emotionlessdev/avito-kitchen/internal/kafkax"
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
+	"github.com/emotionlessdev/avito-kitchen/internal/notify"
+	"github.com/emotionlessdev/avito-kitchen/internal/outbox"
 	"github.com/emotionlessdev/avito-kitchen/internal/pg"
+	"github.com/emotionlessdev/avito-kitchen/internal/search"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -49,7 +53,7 @@ func run() error {
 
 	health := httpx.NewHealth()
 	health.Register("postgres", pg.HealthCheck(pool))
-	// Проверки Kafka и Temporal регистрируются здесь на этапах 6 и 7.
+	// Проверка Temporal регистрируется здесь на этапе 7.
 
 	router := httpx.NewRouter(log, health)
 
@@ -57,13 +61,56 @@ func run() error {
 		slog.String("env", cfg.Env),
 		slog.String("addr", cfg.HTTP.Addr))
 
-	// errgroup держит несколько долгоживущих компонентов: сейчас только
-	// health-сервер, дальше к нему добавятся worker, консьюмеры и relay.
-	// Падение любого из них отменяет общий контекст и гасит остальные.
+	// Топики заводит воркер: автосоздание в брокере выключено, чтобы опечатка
+	// в имени не рождала новый топик. Операция идемпотентна.
+	if kafkaErr := kafkax.WaitReady(ctx, cfg.Kafka, log); kafkaErr != nil {
+		return kafkaErr
+	}
+
+	if topicsErr := kafkax.EnsureTopics(ctx, cfg.Kafka, log); topicsErr != nil {
+		return topicsErr
+	}
+
+	producer, err := kafkax.NewProducer(cfg.Kafka)
+	if err != nil {
+		return err
+	}
+
+	defer producer.Close()
+
+	// errgroup держит несколько долгоживущих компонентов: health-сервер,
+	// outbox-relay и консьюмеров проекций. Падение любого из них отменяет
+	// общий контекст и гасит остальные — воркер без relay бесполезен.
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return httpx.NewServer(cfg.HTTP, cfg.App, router, log).Run(ctx)
 	})
+
+	relay := outbox.NewRelay(pool, producer, kafkax.Route, kafkax.TopicDeadLetter, outbox.Config{
+		BatchSize:    cfg.Outbox.BatchSize,
+		PollInterval: cfg.Outbox.PollInterval,
+		MaxAttempts:  cfg.Outbox.MaxAttempts,
+	}, log)
+
+	g.Go(func() error { return relay.Run(ctx) })
+
+	indexer, err := kafkax.NewConsumer(
+		cfg.Kafka, kafkax.GroupSearchIndexer, []string{kafkax.TopicCatalogEvents},
+		search.NewIndexer(pool, log), producer, log)
+	if err != nil {
+		return err
+	}
+
+	g.Go(func() error { return indexer.Run(ctx) })
+
+	notifier, err := kafkax.NewConsumer(
+		cfg.Kafka, kafkax.GroupNotifier, []string{kafkax.TopicOrderEvents},
+		notify.NewNotifier(pool, log), producer, log)
+	if err != nil {
+		return err
+	}
+
+	g.Go(func() error { return notifier.Run(ctx) })
 
 	if err := g.Wait(); err != nil {
 		return err

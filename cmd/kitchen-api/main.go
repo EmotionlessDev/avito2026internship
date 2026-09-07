@@ -19,6 +19,7 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
 	"github.com/emotionlessdev/avito-kitchen/internal/merchant"
+	"github.com/emotionlessdev/avito-kitchen/internal/order"
 	"github.com/emotionlessdev/avito-kitchen/internal/pg"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
 )
@@ -67,8 +68,10 @@ func run() error {
 	// Корзине нужен каталог: состояние заведения для каскада валидации
 	// берётся оттуда, где живут расписание и геометрия.
 	cartService := cart.NewService(cart.NewRepository(pool), catalogService)
+	orderService := order.NewService(order.NewRepository(pool), cartService, catalogService)
 
-	if err := publicapi.Mount(router, publicapi.New(catalogService, searchService, cartService)); err != nil {
+	publicHandler := publicapi.New(catalogService, searchService, cartService, orderService)
+	if err := publicapi.Mount(router, publicHandler); err != nil {
 		return err
 	}
 
@@ -79,7 +82,8 @@ func run() error {
 		merchant.UnsupportedScheduler{},
 	)
 
-	if err := merchantapi.Mount(router, merchantapi.New(merchantService), merchantService); err != nil {
+	merchantHandler := merchantapi.New(merchantService, orderService)
+	if err := merchantapi.Mount(router, merchantHandler, merchantService); err != nil {
 		return err
 	}
 

@@ -14,19 +14,21 @@ import (
 	gen "github.com/emotionlessdev/avito-kitchen/internal/gen/merchant"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 	"github.com/emotionlessdev/avito-kitchen/internal/merchant"
+	"github.com/emotionlessdev/avito-kitchen/internal/order"
 )
 
 // Handler реализует merchant.StrictServerInterface.
 //
-// Сервис заказов появится здесь полем на этапах 6–7; пока соответствующие
-// ручки отвечают 501.
+// Переходы статусов заказа появятся на этапе 7 вместе с Temporal; пока
+// соответствующие ручки отвечают 501.
 type Handler struct {
 	merchant *merchant.Service
+	orders   *order.Service
 }
 
 // New собирает хендлер контура заведений.
-func New(service *merchant.Service) *Handler {
-	return &Handler{merchant: service}
+func New(service *merchant.Service, orders *order.Service) *Handler {
+	return &Handler{merchant: service, orders: orders}
 }
 
 // ImportMenu — импорт полного снапшота меню.

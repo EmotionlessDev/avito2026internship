@@ -2889,6 +2889,8 @@ type ListOrdersResponse struct {
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *OrderList
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
 }
@@ -2896,6 +2898,11 @@ type ListOrdersResponse struct {
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r ListOrdersResponse) GetJSON200() *OrderList {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r ListOrdersResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
 }
 
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
@@ -3955,6 +3962,13 @@ func ParseListOrdersResponse(rsp *http.Response) (*ListOrdersResponse, error) {
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest Unauthorized
@@ -5521,6 +5535,22 @@ func (response ListOrders200JSONResponse) VisitListOrdersResponse(w http.Respons
 	return err
 }
 
+type ListOrders400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response ListOrders400ApplicationProblemPlusJSONResponse) VisitListOrdersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListOrders401ApplicationProblemPlusJSONResponse struct {
 	UnauthorizedApplicationProblemPlusJSONResponse
 }
@@ -6629,38 +6659,38 @@ var swaggerSpec = []string{
 	"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",
-	"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",
-	"yurGXc1gRNg7Bf1IXsBhj8d3Hv/fAQA=",
+	"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",
+	"rOl6rW7cCA1GhL1T0I/kBRz2eHzn8f8dAA==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

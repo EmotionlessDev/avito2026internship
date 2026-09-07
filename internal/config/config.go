@@ -66,6 +66,28 @@ type Postgres struct {
 	ConnectTimeout time.Duration
 }
 
+// Kafka — параметры брокера событий.
+//
+// Kafka здесь не критична для чтения каталога: её падение задерживает
+// проекции, но не мешает отдавать данные из Postgres. Поэтому таймауты
+// короткие — лучше отложить публикацию, чем копить зависшие запросы.
+type Kafka struct {
+	Brokers []string
+	// Partitions и ReplicationFactor применяются только при создании топиков.
+	// В стенде брокер один, поэтому и фактор репликации — 1.
+	Partitions        int32
+	ReplicationFactor int16
+	MaxMessageBytes   int32
+	Timeout           time.Duration
+}
+
+// Outbox — параметры доставки событий из базы в брокер.
+type Outbox struct {
+	BatchSize    int
+	PollInterval time.Duration
+	MaxAttempts  int
+}
+
 // KitchenAPI — конфигурация HTTP-сервиса (public + merchant контуры).
 type KitchenAPI struct {
 	App
@@ -79,6 +101,8 @@ type KitchenWorker struct {
 	App
 	HTTP     HTTP
 	Postgres Postgres
+	Kafka    Kafka
+	Outbox   Outbox
 }
 
 // LoadKitchenAPI читает конфигурацию kitchen-api.
@@ -104,6 +128,8 @@ func LoadKitchenWorker() (KitchenWorker, error) {
 		App:      l.app("kitchen-worker"),
 		HTTP:     l.http(":8081"),
 		Postgres: l.postgres(),
+		Kafka:    l.kafka(),
+		Outbox:   l.outbox(),
 	}
 
 	if err := l.err(); err != nil {
@@ -177,5 +203,27 @@ func (l *loader) postgres() Postgres {
 		MaxConnLifetime: l.duration("POSTGRES_MAX_CONN_LIFETIME", time.Hour),
 		MaxConnIdleTime: l.duration("POSTGRES_MAX_CONN_IDLE_TIME", 30*time.Minute),
 		ConnectTimeout:  l.duration("POSTGRES_CONNECT_TIMEOUT", 5*time.Second),
+	}
+}
+
+func (l *loader) kafka() Kafka {
+	return Kafka{
+		// Дефолт указывает на внешний listener стенда, чтобы воркер можно
+		// было запустить с хоста; в compose адрес переопределяется.
+		Brokers:           l.list("KAFKA_BROKERS", []string{"localhost:9094"}),
+		Partitions:        l.int32("KAFKA_PARTITIONS", 3),
+		ReplicationFactor: l.int16("KAFKA_REPLICATION_FACTOR", 1),
+		MaxMessageBytes:   l.int32("KAFKA_MAX_MESSAGE_BYTES", 1_048_576),
+		Timeout:           l.duration("KAFKA_TIMEOUT", 10*time.Second),
+	}
+}
+
+func (l *loader) outbox() Outbox {
+	return Outbox{
+		BatchSize: int(l.int32("OUTBOX_BATCH_SIZE", 100)),
+		// Опрос — страховка: основной сигнал приходит через LISTEN/NOTIFY,
+		// поэтому интервал может быть спокойным.
+		PollInterval: l.duration("OUTBOX_POLL_INTERVAL", 2*time.Second),
+		MaxAttempts:  int(l.int32("OUTBOX_MAX_ATTEMPTS", 5)),
 	}
 }
