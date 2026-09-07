@@ -31,6 +31,20 @@ type posOrder struct {
 	Comment          string         `json:"comment,omitempty"`
 }
 
+// posOrderCancelled — уведомление заведения о том, что заказ снят.
+//
+// Контракт заведения обещает это событие на отмену пользователем и на
+// истёкший таймер подтверждения: без него кухня продолжала бы считать
+// заказ живым (api/pos-webhooks.openapi.yaml).
+type posOrderCancelled struct {
+	EventID     uuid.UUID `json:"event_id"`
+	OccurredAt  time.Time `json:"occurred_at"`
+	OrderID     uuid.UUID `json:"order_id"`
+	Number      string    `json:"number,omitempty"`
+	Reason      string    `json:"reason"`
+	CancelledBy string    `json:"cancelled_by,omitempty"`
+}
+
 type posOrderItem struct {
 	ExternalItemID string           `json:"external_item_id"`
 	Name           string           `json:"name"`
@@ -86,5 +100,18 @@ func orderCreatedEvent(eventID uuid.UUID, current order.Order) posOrderCreated {
 			ContactPhone:     current.ContactPhone,
 			Comment:          current.Comment,
 		},
+	}
+}
+
+func orderCancelledEvent(
+	eventID uuid.UUID, current order.Order, reason, cancelledBy string,
+) posOrderCancelled {
+	return posOrderCancelled{
+		EventID:     eventID,
+		OccurredAt:  time.Now().UTC(),
+		OrderID:     current.ID,
+		Number:      current.Number,
+		Reason:      reason,
+		CancelledBy: cancelledBy,
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/emotionlessdev/avito-kitchen/internal/order"
@@ -185,16 +186,67 @@ func (a *Activities) SendOrderToVenue(ctx context.Context, orderID uuid.UUID) er
 	return a.postWebhook(ctx, webhook, current)
 }
 
+// CancelNotice — что сообщить заведению о снятом заказе.
+type CancelNotice struct {
+	OrderID uuid.UUID `json:"order_id"`
+	Reason  string    `json:"reason"`
+	// CancelledBy — user или system, как в контракте заведения.
+	CancelledBy string `json:"cancelled_by"`
+}
+
+// NotifyVenueCancelled снимает заказ с производства на стороне заведения.
+//
+// Без этого вызова кухня узнавала бы об отмене только косвенно — по 409
+// на попытке подтвердить заказ, — а заказ, который никто не подтверждал,
+// висел бы у неё новым бесконечно.
+func (a *Activities) NotifyVenueCancelled(ctx context.Context, notice CancelNotice) error {
+	current, err := a.orders.ByID(ctx, notice.OrderID)
+	if err != nil {
+		return err
+	}
+
+	webhook, err := a.orders.VenueWebhook(ctx, current.VenueID)
+	if err != nil {
+		return err
+	}
+
+	if webhook.URL == "" {
+		activity.GetLogger(ctx).Info("вебхук не зарегистрирован, отмену сообщать некуда",
+			"order", current.Number)
+
+		return nil
+	}
+
+	eventID := uuid.New()
+
+	body, err := json.Marshal(orderCancelledEvent(eventID, current, notice.Reason, notice.CancelledBy))
+	if err != nil {
+		return fmt.Errorf("сериализация отмены для заведения: %w", err)
+	}
+
+	url := strings.TrimSuffix(webhook.URL, "/orders") + "/orders/" + current.ID.String() + "/cancelled"
+
+	return a.deliver(ctx, webhook, url, eventID, body)
+}
+
 func (a *Activities) postWebhook(ctx context.Context, webhook order.Webhook, current order.Order) error {
 	eventID := uuid.New()
-	timestamp := time.Now().UTC().Format(time.RFC3339)
 
 	body, err := json.Marshal(orderCreatedEvent(eventID, current))
 	if err != nil {
 		return fmt.Errorf("сериализация заказа для заведения: %w", err)
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook.URL, bytes.NewReader(body))
+	return a.deliver(ctx, webhook, webhook.URL, eventID, body)
+}
+
+// deliver отправляет подписанный вебхук и трактует ответ заведения.
+func (a *Activities) deliver(
+	ctx context.Context, webhook order.Webhook, url string, eventID uuid.UUID, body []byte,
+) error {
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("запрос в заведение: %w", err)
 	}
@@ -212,8 +264,11 @@ func (a *Activities) postWebhook(ctx context.Context, webhook order.Webhook, cur
 	defer func() { _ = response.Body.Close() }()
 
 	// 409 — заведение уже видело это событие. Для нас это успех: доставка
-	// at-least-once, и повтор — норма.
-	if response.StatusCode == http.StatusConflict || response.StatusCode/100 == 2 {
+	// at-least-once, и повтор — норма. 404 на отмене — тоже: заказа
+	// у заведения нет, снимать нечего.
+	if response.StatusCode == http.StatusConflict ||
+		response.StatusCode == http.StatusNotFound ||
+		response.StatusCode/100 == 2 {
 		return nil
 	}
 

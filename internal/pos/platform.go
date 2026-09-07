@@ -38,10 +38,12 @@ func NewPlatform(baseURL, apiKey string) (*Platform, error) {
 	return &Platform{client: client}, nil
 }
 
-// ImportMenu отправляет платформе полный снапшот меню.
+// ImportMenu отправляет платформе полный снапшот меню и возвращает счётчики
+// diff'а. Счётчики нужны не самому заведению, а демо-прогону: сценарий M2
+// доказывает идемпотентность повторного импорта именно по ним.
 func (p *Platform) ImportMenu(
 	ctx context.Context, items []MenuItem, categories []menuCategory, groups []menuOptionGroup,
-) error {
+) (merchant.MenuImportResult, error) {
 	snapshot := merchant.MenuSnapshot{
 		Categories: make([]merchant.SnapshotCategory, 0, len(categories)),
 		Items:      make([]merchant.SnapshotItem, 0, len(items)),
@@ -81,14 +83,15 @@ func (p *Platform) ImportMenu(
 
 	response, err := p.client.ImportMenuWithResponse(ctx, snapshot)
 	if err != nil {
-		return fmt.Errorf("импорт меню: %w", err)
+		return merchant.MenuImportResult{}, fmt.Errorf("импорт меню: %w", err)
 	}
 
-	if response.StatusCode() != http.StatusOK {
-		return fmt.Errorf("импорт меню: %w", statusError(response.StatusCode(), response.Body))
+	if response.StatusCode() != http.StatusOK || response.JSON200 == nil {
+		return merchant.MenuImportResult{},
+			fmt.Errorf("импорт меню: %w", statusError(response.StatusCode(), response.Body))
 	}
 
-	return nil
+	return *response.JSON200, nil
 }
 
 // snapshotGroups собирает модификаторы позиции для снапшота.

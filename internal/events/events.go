@@ -72,6 +72,11 @@ type OrderCreated struct {
 }
 
 // OrderStatusChanged — событие перехода статуса.
+//
+// Событие самодостаточно: витрина статистики считает по нему выручку и время
+// подтверждения, не ходя обратно в базу за заказом. Сумма и две отметки
+// времени едут здесь именно поэтому, а не потому, что они кому-то нужны
+// в уведомлении.
 type OrderStatusChanged struct {
 	OrderID    uuid.UUID `json:"order_id"`
 	Number     string    `json:"number"`
@@ -82,4 +87,13 @@ type OrderStatusChanged struct {
 	ActorType  string    `json:"actor_type"`
 	Reason     string    `json:"reason,omitempty"`
 	ChangedAt  time.Time `json:"changed_at"`
+	// TotalAmountMinor — сумма заказа: по ней считается выручка дня.
+	TotalAmountMinor int64 `json:"total_amount_minor"`
+	// OrderCreatedAt — день заказа. Показатели группируются по нему,
+	// а не по времени перехода: заказ, завершённый в 00:10, относится
+	// к тому дню, когда его оформили.
+	OrderCreatedAt time.Time `json:"order_created_at"`
+	// PlacedAt — момент отправки заказа в заведение; вместе с ChangedAt
+	// даёт время подтверждения. Пусто, пока заказ не дошёл до placed.
+	PlacedAt *time.Time `json:"placed_at,omitempty"`
 }

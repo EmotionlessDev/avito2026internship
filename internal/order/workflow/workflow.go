@@ -371,7 +371,39 @@ func compensate(ctx sdk.Context, input OrderInput, to order.Status, actor order.
 		return err
 	}
 
-	return setStatus(ctx, input, to, actor, reason, nil)
+	if err := setStatus(ctx, input, to, actor, reason, nil); err != nil {
+		return err
+	}
+
+	notifyVenueCancelled(ctx, input, to, actor, reason)
+
+	return nil
+}
+
+// notifyVenueCancelled снимает заказ с производства у заведения.
+//
+// Отказ самого заведения сюда не попадает: рассказывать кухне о её же
+// решении незачем. Сбой вызова не валит процесс — заказ на платформе уже
+// отменён и деньги возвращены, а недоступный POS узнает об отмене
+// по 409 на попытке подтвердить заказ.
+func notifyVenueCancelled(
+	ctx sdk.Context, input OrderInput, to order.Status, actor order.Actor, reason string,
+) {
+	if to != order.StatusCancelled && to != order.StatusExpired {
+		return
+	}
+
+	var activities *Activities
+
+	err := sdk.ExecuteActivity(ctx, activities.NotifyVenueCancelled, CancelNotice{
+		OrderID:     input.OrderID,
+		Reason:      reason,
+		CancelledBy: string(actor),
+	}).Get(ctx, nil)
+	if err != nil {
+		sdk.GetLogger(ctx).Warn("заведению не удалось сообщить об отмене",
+			"order", input.Number, "error", err.Error())
+	}
 }
 
 func setStatus(

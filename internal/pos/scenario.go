@@ -51,6 +51,7 @@ func (s *Service) mountScenarios(router chi.Router) {
 	router.Post("/stop-item/{externalID}", s.scenarioStopItem)
 	router.Post("/stop-option/{externalID}", s.scenarioStopOption)
 	router.Post("/raise-price/{externalID}", s.scenarioRaisePrice)
+	router.Post("/reset-menu", s.scenarioResetMenu)
 }
 
 func (s *Service) scenarioRejectNext(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +179,7 @@ func (s *Service) scenarioRaisePrice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.syncMenu(r.Context()); err != nil {
+	if _, err := s.syncMenu(r.Context()); err != nil {
 		s.scenarioFailed(w, r, err)
 
 		return
@@ -189,6 +190,58 @@ func (s *Service) scenarioRaisePrice(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(r.Context(), s.log, w, http.StatusOK, map[string]any{
 		fieldScenario: "raise-price", fieldExternalID: externalID, "price_minor": updated,
+	})
+}
+
+// scenarioResetMenu возвращает заведение в исходное состояние и заново
+// подключает его к платформе — то же, что делает онбординг (сценарий M1).
+//
+// Нужен демо-прогону с двух сторон: он откатывает подорожание и стоп-листы
+// предыдущего прогона, а повторный вызов доказывает идемпотентность импорта
+// (сценарий M2) — платформа на неизменившийся снапшот отвечает нулями.
+func (s *Service) scenarioResetMenu(w http.ResponseWriter, r *http.Request) {
+	seed, err := loadMenuSeed()
+	if err != nil {
+		s.scenarioFailed(w, r, err)
+
+		return
+	}
+
+	if resetErr := s.storage.ResetMenu(r.Context(), seed.Items); resetErr != nil {
+		s.scenarioFailed(w, r, resetErr)
+
+		return
+	}
+
+	result, err := s.syncMenu(r.Context())
+	if err != nil {
+		s.scenarioFailed(w, r, err)
+
+		return
+	}
+
+	// Вебхук регистрируется здесь же: заведение, которое отдало меню, но не
+	// сказало, куда слать заказы, подключённым не считается.
+	if err := s.platform.RegisterWebhook(
+		r.Context(), s.cfg.WebhookURL, s.cfg.WebhookSecret,
+	); err != nil {
+		s.scenarioFailed(w, r, err)
+
+		return
+	}
+
+	s.log.InfoContext(r.Context(), "сценарий: меню сброшено и переотправлено",
+		slog.Int("created", result.Created),
+		slog.Int("updated", result.Updated),
+		slog.Int("archived", result.Archived),
+		slog.Bool("idempotent", result.Idempotent))
+
+	writeJSON(r.Context(), s.log, w, http.StatusOK, map[string]any{
+		fieldScenario: "reset-menu",
+		"created":     result.Created,
+		"updated":     result.Updated,
+		"archived":    result.Archived,
+		"idempotent":  result.Idempotent,
 	})
 }
 

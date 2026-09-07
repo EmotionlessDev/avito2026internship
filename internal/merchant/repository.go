@@ -1080,3 +1080,49 @@ func (r *Repository) MenuSnapshotFor(
 
 	return items, nil
 }
+
+// DailyStats читает витрину показателей заведения за сегодня.
+//
+// «Сегодня» считается в часовом поясе заведения — так же, как его считал
+// консьюмер, который витрину наполнял. Строки может не быть вовсе: день,
+// в котором ещё не было заказов, — это нули, а не 404.
+func (r *Repository) DailyStats(ctx context.Context) (DailyStats, error) {
+	venueID, err := TenantFrom(ctx)
+	if err != nil {
+		return DailyStats{}, err
+	}
+
+	var (
+		stats       DailyStats
+		acceptTotal int64
+		acceptCount int
+	)
+
+	err = r.pool.QueryRow(ctx, `
+		SELECT today.stat_date,
+		       COALESCE(s.orders_total, 0),
+		       COALESCE(s.orders_completed, 0),
+		       COALESCE(s.orders_rejected, 0),
+		       COALESCE(s.orders_expired, 0),
+		       COALESCE(s.revenue_minor, 0),
+		       COALESCE(s.accept_seconds_total, 0),
+		       COALESCE(s.accept_count, 0)
+		FROM (
+			SELECT (now() AT TIME ZONE v.timezone)::date AS stat_date
+			FROM venues v WHERE v.id = $1
+		) AS today
+		LEFT JOIN venue_daily_stats s
+		       ON s.venue_id = $1 AND s.stat_date = today.stat_date`, venueID).
+		Scan(&stats.Date, &stats.OrdersTotal, &stats.OrdersCompleted, &stats.OrdersRejected,
+			&stats.OrdersExpired, &stats.RevenueMinor, &acceptTotal, &acceptCount)
+	if err != nil {
+		return DailyStats{}, fmt.Errorf("чтение витрины статистики: %w", err)
+	}
+
+	if acceptCount > 0 {
+		average := int(acceptTotal / int64(acceptCount))
+		stats.AvgAcceptSeconds = &average
+	}
+
+	return stats, nil
+}

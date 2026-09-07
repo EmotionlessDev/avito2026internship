@@ -362,7 +362,7 @@ func (r *Repository) AddLine(
 		}
 
 		if venueID != nil && *venueID != item.VenueID {
-			return ErrMixedVenues
+			return MixedVenuesError{VenueName: venueName(ctx, tx, *venueID)}
 		}
 
 		encoded, err := json.Marshal(normalizeIDs(optionIDs))
@@ -398,6 +398,19 @@ func lockCart(
 	}
 
 	return cartID, venueID, nil
+}
+
+// venueName читает название заведения — оно нужно только тексту ошибки
+// о смешанной корзине, поэтому запрашивается отдельно и лишь тогда,
+// когда ошибка уже случилась.
+func venueName(ctx context.Context, tx pgx.Tx, venueID uuid.UUID) string {
+	var name string
+
+	if err := tx.QueryRow(ctx, `SELECT name FROM venues WHERE id = $1`, venueID).Scan(&name); err != nil {
+		return ""
+	}
+
+	return name
 }
 
 func upsertLine(

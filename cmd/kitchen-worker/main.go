@@ -26,6 +26,7 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/payments"
 	"github.com/emotionlessdev/avito-kitchen/internal/pg"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
+	"github.com/emotionlessdev/avito-kitchen/internal/stats"
 	"github.com/emotionlessdev/avito-kitchen/internal/temporalx"
 
 	"go.temporal.io/sdk/worker"
@@ -124,6 +125,15 @@ func run() error {
 	}
 
 	g.Go(func() error { return notifier.Run(ctx) })
+
+	merchantStats, err := kafkax.NewConsumer(
+		cfg.Kafka, kafkax.GroupMerchantStats, []string{kafkax.TopicOrderEvents},
+		stats.NewProjector(pool, log), producer, log)
+	if err != nil {
+		return err
+	}
+
+	g.Go(func() error { return merchantStats.Run(ctx) })
 
 	// Temporal-worker: процессы заказов и стоп-листов. Активности держат
 	// подключение к базе и платёжному провайдеру — сам workflow к ним

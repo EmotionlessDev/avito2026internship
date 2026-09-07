@@ -752,7 +752,25 @@ erDiagram
         timestamptz updated_at
         tsvector search_vector "GENERATED, GIN-индекс"
     }
+    VENUE_DAILY_STATS {
+        uuid venue_id PK
+        date stat_date PK "день в часовом поясе заведения"
+        int orders_total
+        int orders_completed
+        int orders_rejected
+        int orders_expired
+        bigint revenue_minor "по завершённым заказам"
+        bigint accept_seconds_total "слагаемое среднего"
+        int accept_count "делитель среднего"
+        timestamptz updated_at
+    }
 ```
+
+`venue_daily_stats` — проекция `order-events` для сценария M8. Среднее время
+подтверждения хранится суммой и счётчиком, а не готовым средним: среднее нельзя
+досчитать инкрементально, а сумму и счётчик — можно. День считается в часовом
+поясе заведения и там, где витрина наполняется, и там, где читается: «сегодня»
+для владельца заведения — это его сегодня.
 
 Индексы, которые действительно нужны:
 

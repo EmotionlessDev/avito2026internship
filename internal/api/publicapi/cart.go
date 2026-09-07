@@ -179,6 +179,21 @@ func (h *Handler) requireUser(ctx context.Context) (uuid.UUID, error) {
 	return userID, nil
 }
 
+// mixedVenuesDetail называет заведение, которое занимает корзину.
+//
+// Название приходит из домена, а не собирается в хендлере: спросить
+// «очистить корзину?», не сказав чью, — значит заставить пользователя
+// гадать, что он потеряет.
+func mixedVenuesDetail(err error) string {
+	var mixed cart.MixedVenuesError
+	if errors.As(err, &mixed) && mixed.VenueName != "" {
+		return "В корзине блюда из «" + mixed.VenueName +
+			"» — очистите корзину, чтобы заказать в другом заведении"
+	}
+
+	return "Очистите корзину, чтобы заказать в другом заведении"
+}
+
 func addCartItemError(ctx context.Context, err error) (public.AddCartItemResponseObject, error) {
 	switch {
 	case errors.Is(err, cart.ErrMenuItemNotFound):
@@ -192,7 +207,7 @@ func addCartItemError(ctx context.Context, err error) (public.AddCartItemRespons
 		return public.AddCartItem409ApplicationProblemPlusJSONResponse(
 			problem(ctx, http.StatusConflict, cart.CodeCartMixedVenues,
 				"В корзине блюда другого заведения",
-				"Очистите корзину, чтобы заказать в другом заведении"),
+				mixedVenuesDetail(err)),
 		), nil
 	case errors.Is(err, cart.ErrInvalidOptions):
 		return public.AddCartItem400ApplicationProblemPlusJSONResponse{

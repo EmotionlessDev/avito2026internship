@@ -26,6 +26,7 @@ type fakeStore struct {
 	scheduled    []merchant.ScheduledReturn
 	settings     merchant.VenueSettings
 	webhook      merchant.Webhook
+	stats        merchant.DailyStats
 }
 
 func (f *fakeStore) AuthenticateKey(_ context.Context, keyHash string) (uuid.UUID, error) {
@@ -93,6 +94,10 @@ func (f *fakeStore) UpsertWebhook(_ context.Context, webhook merchant.Webhook) (
 	f.webhook = webhook
 
 	return merchant.Webhook{URL: webhook.URL, IsActive: true}, nil
+}
+
+func (f *fakeStore) DailyStats(_ context.Context) (merchant.DailyStats, error) {
+	return f.stats, nil
 }
 
 // recordingScheduler — планировщик, который умеет всё и запоминает вызовы.

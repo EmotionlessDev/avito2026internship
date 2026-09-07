@@ -150,6 +150,20 @@ type WorkInterval struct {
 	ClosesAt string
 }
 
+// DailyStats — показатели заведения за календарный день (сценарий M8).
+//
+// AvgAcceptSeconds — указатель: «подтверждений сегодня ещё не было» и
+// «среднее равно нулю» — разные ответы, и контракт отличает их null'ом.
+type DailyStats struct {
+	Date             time.Time
+	OrdersTotal      int
+	OrdersCompleted  int
+	OrdersRejected   int
+	OrdersExpired    int
+	RevenueMinor     int64
+	AvgAcceptSeconds *int
+}
+
 // Webhook — куда платформа шлёт заказы и чем их подписывает.
 type Webhook struct {
 	URL      string

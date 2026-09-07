@@ -282,6 +282,45 @@ func (s *Storage) UpsertMenu(ctx context.Context, items []MenuItem) error {
 	return nil
 }
 
+// ResetMenu возвращает меню к исходному снапшоту заведения — вместе с ценами
+// и наличием.
+//
+// Отличается от UpsertMenu ровно этим: обычный старт не имеет права затирать
+// цену и стоп-лист, которые повар выставил руками, а сброс демо-прогона обязан
+// это сделать, иначе второй прогон demo.sh начинался бы с чужого состояния.
+func (s *Storage) ResetMenu(ctx context.Context, items []MenuItem) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("транзакция сброса меню: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	for _, item := range items {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO menu_items (external_id, category, name, description, price_minor, position, is_available)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (external_id) DO UPDATE SET
+				category = excluded.category,
+				name = excluded.name,
+				description = excluded.description,
+				price_minor = excluded.price_minor,
+				position = excluded.position,
+				is_available = excluded.is_available`,
+			item.ExternalID, item.Category, item.Name, item.Description,
+			item.PriceMinor, item.Position, boolToInt(item.IsAvailable))
+		if err != nil {
+			return fmt.Errorf("сброс позиции меню: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("коммит сброса меню: %w", err)
+	}
+
+	return nil
+}
+
 // Menu отдаёт меню заведения.
 func (s *Storage) Menu(ctx context.Context) ([]MenuItem, error) {
 	rows, err := s.db.QueryContext(ctx, `

@@ -312,14 +312,35 @@ func sseReader(ctx context.Context, events <-chan order.StatusChange) io.Reader 
 	return reader
 }
 
+// notCancellableDetail объясняет отказ по текущему статусу.
+//
+// Один текст на все статусы врал бы: заказ в created ещё не дошёл
+// до заведения, и «блюда уже приготовлены» — неправда, по которой
+// поддержка сделает неверный вывод.
+func notCancellableDetail(status order.Status) string {
+	switch status {
+	case order.StatusCreated:
+		return "Заказ ещё оформляется — повторите попытку через несколько секунд"
+	case order.StatusReady, order.StatusDelivering:
+		return "Заказ в статусе " + string(status) + " — заведение уже приготовило блюда"
+	case order.StatusCompleted, order.StatusCancelled, order.StatusRejected,
+		order.StatusExpired, order.StatusPaymentFailed:
+		return "Заказ в статусе " + string(status) + " — он уже завершён"
+	case order.StatusPlaced, order.StatusAccepted, order.StatusCooking:
+		// Эти статусы отменяются, сюда попасть можно только гонкой.
+		return "Заказ в статусе " + string(status) + " — отмена больше не проходит"
+	default:
+		return "Заказ в статусе " + string(status)
+	}
+}
+
 func cancelOrderError(ctx context.Context, err error) (public.CancelOrderResponseObject, error) {
 	var notCancellable order.ErrNotCancellable
 	if errors.As(err, &notCancellable) {
 		return public.CancelOrder409ApplicationProblemPlusJSONResponse(
 			problem(ctx, http.StatusConflict, "ORDER_NOT_CANCELLABLE",
 				"Заказ уже нельзя отменить",
-				"Заказ в статусе "+string(notCancellable.Status)+
-					" — заведение уже приготовило блюда"),
+				notCancellableDetail(notCancellable.Status)),
 		), nil
 	}
 

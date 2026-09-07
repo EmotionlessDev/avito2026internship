@@ -8,6 +8,7 @@ import (
 	orderworkflow "github.com/emotionlessdev/avito-kitchen/internal/order/workflow"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -42,6 +43,16 @@ func (s *OrderWorkflowSuite) SetupTest() {
 	s.env.RegisterActivity(s.activities.CapturePayment)
 	s.env.RegisterActivity(s.activities.VoidPayment)
 	s.env.RegisterActivity(s.activities.AssignCourier)
+	s.env.RegisterActivity(s.activities.NotifyVenueCancelled)
+}
+
+// expectCancelNotice требует, чтобы заведению сообщили об отмене: заказ,
+// снятый на платформе, не должен остаться живым на кухне.
+func (s *OrderWorkflowSuite) expectCancelNotice(by order.Actor) {
+	s.env.OnActivity(s.activities.NotifyVenueCancelled, mockAny,
+		mock.MatchedBy(func(notice orderworkflow.CancelNotice) bool {
+			return notice.CancelledBy == string(by)
+		})).Return(nil).Once()
 }
 
 func (s *OrderWorkflowSuite) AfterTest(_, _ string) {
@@ -130,6 +141,7 @@ func (s *OrderWorkflowSuite) TestConfirmationTimeoutExpiresOrder() {
 
 	s.expectStatus(order.StatusPlaced, order.ActorSystem)
 	s.expectStatus(order.StatusExpired, order.ActorSystem)
+	s.expectCancelNotice(order.ActorSystem)
 
 	started := time.Now()
 
@@ -150,6 +162,7 @@ func (s *OrderWorkflowSuite) TestUserCancelBeforeConfirmation() {
 
 	s.expectStatus(order.StatusPlaced, order.ActorSystem)
 	s.expectStatus(order.StatusCancelled, order.ActorUser)
+	s.expectCancelNotice(order.ActorUser)
 
 	s.env.RegisterDelayedCallback(func() {
 		s.env.SignalWorkflow(orderworkflow.SignalCancel,
@@ -173,6 +186,7 @@ func (s *OrderWorkflowSuite) TestUserCancelWhileCooking() {
 	s.expectStatus(order.StatusAccepted, order.ActorVenue)
 	s.expectStatus(order.StatusCooking, order.ActorSystem)
 	s.expectStatus(order.StatusCancelled, order.ActorUser)
+	s.expectCancelNotice(order.ActorUser)
 
 	s.env.RegisterDelayedCallback(func() {
 		s.env.SignalWorkflow(orderworkflow.SignalVenueDecision,
