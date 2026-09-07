@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Версия Go нигде не дублируется: все job'ы берут её из go.mod, потому что
+# проверять проект нужно тем тулчейном, которым он объявлен. Разъехавшаяся
+# версия — это локально зелёное и красное в CI без единой правки кода.
+
+# Новый пуш в ветку отменяет предыдущий прогон: держать очередь из устаревших
+# сборок незачем.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Линтеры
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Линтер ставится тем же Makefile'ом, что и локально: отдельный action
+      # пришлось бы вручную держать в согласии с версией из Makefile.
+      - name: golangci-lint
+        run: make lint
+
+      - name: Линтер OpenAPI-спек
+        run: make lint-api
+
+      - name: Кодогенерация не разошлась со спеками
+        run: |
+          make generate
+          git diff --exit-code internal/gen \
+            || { echo "::error::internal/gen разошёлся со спеками — прогоните make generate"; exit 1; }
+
+  test:
+    name: Тесты и покрытие
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Юнит-тесты отдельным шагом и с -race: гонку ловит только он,
+      # а под покрытием тесты идут без него — иначе прогон вдвое дольше.
+      - name: Юнит-тесты с детектором гонок
+        run: make test-unit
+
+      # Порог покрытия считается по объединённому профилю юнит- и
+      # интеграционных тестов: репозитории закрываются только на живом
+      # Postgres, и мерить их отдельно бессмысленно. Docker на раннере есть,
+      # testcontainers поднимает базу сам.
+      - name: Покрытие доменных пакетов
+        run: make cover
+
+      - name: Сохранить профиль покрытия
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: ignore
+
+  build:
+    name: Сборка образов
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Сборка бинарей
+        run: make build
+
+      # Образы собираются тем же Dockerfile, что и стенд: сборка, которая
+      # проходит локально, но падает в докере, — обычное дело.
+      - name: Сборка образов сервисов
+        run: |
+          for service in kitchen-api kitchen-worker merchant-pos migrator; do
+            docker build --build-arg SERVICE="$service" -f build/Dockerfile -t "avito-kitchen-$service:ci" .
+          done
+
+  e2e:
+    name: Бизнес-сценарии
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Таймер подтверждения укорочен: сценарий U10 ждёт его честно,
+      # и семь минут по умолчанию сделали бы прогон CI бессмысленно долгим.
+      - name: Поднять стенд
+        env:
+          ORDER_CONFIRMATION_TIMEOUT: 25s
+        run: make up
+
+      - name: Прогнать 22 сценария
+        env:
+          ORDER_CONFIRMATION_TIMEOUT: 25s
+        run: make demo
+
+      - name: Логи стенда при падении
+        if: failure()
+        run: docker compose logs --tail 200
+
+      - name: Погасить стенд
+        if: always()
+        run: make down
+
+  diagrams:
+    name: Диаграммы
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Сломанная диаграмма на GitHub выглядит пустым блоком, а не ошибкой:
+      # поймать это можно только рендерером.
+      - name: Рендер Mermaid
+        run: make check-diagrams

@@ -41,13 +41,20 @@ build: ## Собрать все бинари
 	go build ./...
 
 .PHONY: test
-test: ## Прогнать тесты с детектором гонок
+test: ## Все тесты с детектором гонок (интеграционным нужен docker)
 	go test ./... -race -count=1
 
+.PHONY: test-unit
+test-unit: ## Только юнит-тесты — без docker и без контейнеров
+	go test ./internal/... ./migrations/... -race -count=1
+
+.PHONY: test-integration
+test-integration: ## Репозитории на настоящем Postgres (testcontainers)
+	go test ./tests/integration/... -count=1
+
 .PHONY: cover
-cover: ## Тесты с отчётом о покрытии
-	go test ./... -race -count=1 -coverprofile=coverage.out -covermode=atomic
-	go tool cover -func=coverage.out | tail -1
+cover: ## Покрытие доменных пакетов с проверкой порога
+	./scripts/check-coverage.sh
 
 .PHONY: lint
 lint: $(GOLANGCI_LINT) ## Статический анализ (.golangci.yml)

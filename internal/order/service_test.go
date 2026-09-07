@@ -26,10 +26,27 @@ var (
 type fakeStore struct {
 	byKey   map[string]order.Order
 	created []order.Draft
+	// existing — заказы, которые «уже лежат» в базе: их отдают чтения
+	// и сигнальные методы.
+	existing map[uuid.UUID]order.Order
+	listed   []order.Order
+	listErr  error
 }
 
 func newStore() *fakeStore {
-	return &fakeStore{byKey: map[string]order.Order{}}
+	return &fakeStore{byKey: map[string]order.Order{}, existing: map[uuid.UUID]order.Order{}}
+}
+
+// put кладёт заказ так, будто он уже оформлен: тестам сигналов нужен
+// заказ в конкретном статусе, а не путь его оформления.
+func (f *fakeStore) put(status order.Status) order.Order {
+	stored := order.Order{
+		ID: uuid.New(), Number: "К-260907-0042",
+		UserID: userID, VenueID: venueID, Status: status,
+	}
+	f.existing[stored.ID] = stored
+
+	return stored
 }
 
 func (f *fakeStore) Create(_ context.Context, draft order.Draft) (order.Order, bool, error) {
@@ -62,24 +79,34 @@ func (f *fakeStore) ByIdempotencyKey(
 	return existing, found, nil
 }
 
-func (f *fakeStore) ByUser(_ context.Context, _, _ uuid.UUID) (order.Order, error) {
-	return order.Order{}, order.ErrNotFound
+func (f *fakeStore) ByUser(_ context.Context, owner, orderID uuid.UUID) (order.Order, error) {
+	stored, found := f.existing[orderID]
+	if !found || stored.UserID != owner {
+		return order.Order{}, order.ErrNotFound
+	}
+
+	return stored, nil
 }
 
-func (f *fakeStore) ByVenue(_ context.Context, _, _ uuid.UUID) (order.Order, error) {
-	return order.Order{}, order.ErrNotFound
+func (f *fakeStore) ByVenue(_ context.Context, venue, orderID uuid.UUID) (order.Order, error) {
+	stored, found := f.existing[orderID]
+	if !found || stored.VenueID != venue {
+		return order.Order{}, order.ErrNotFound
+	}
+
+	return stored, nil
 }
 
 func (f *fakeStore) ListByUser(
 	_ context.Context, _ uuid.UUID, _ order.Filter,
 ) ([]order.Order, error) {
-	return nil, nil
+	return f.listed, f.listErr
 }
 
 func (f *fakeStore) ListByVenue(
 	_ context.Context, _ uuid.UUID, _ order.Filter,
 ) ([]order.Order, error) {
-	return nil, nil
+	return f.listed, f.listErr
 }
 
 // fakeProcess запоминает, что сервис попросил у процесса заказа.
@@ -89,6 +116,8 @@ type fakeProcess struct {
 	cancelled []uuid.UUID
 	accepted  []uuid.UUID
 	rejected  []uuid.UUID
+	ready     []uuid.UUID
+	delivered []uuid.UUID
 	err       error
 }
 
@@ -114,9 +143,17 @@ func (f *fakeProcess) VenueRejected(_ context.Context, orderID uuid.UUID, _ stri
 	return f.err
 }
 
-func (f *fakeProcess) Ready(_ context.Context, _ uuid.UUID) error { return f.err }
+func (f *fakeProcess) Ready(_ context.Context, orderID uuid.UUID) error {
+	f.ready = append(f.ready, orderID)
 
-func (f *fakeProcess) Delivered(_ context.Context, _ uuid.UUID) error { return f.err }
+	return f.err
+}
+
+func (f *fakeProcess) Delivered(_ context.Context, orderID uuid.UUID) error {
+	f.delivered = append(f.delivered, orderID)
+
+	return f.err
+}
 
 func (f *fakeProcess) Cancel(_ context.Context, orderID uuid.UUID, _ string) error {
 	f.cancelled = append(f.cancelled, orderID)

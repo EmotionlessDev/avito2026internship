@@ -36,6 +36,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   `build/Dockerfile.demo`, профиль `demo` в compose.
 - `make check-diagrams` — все Mermaid-блоки markdown через `mermaid-cli`:
   сломанная диаграмма на GitHub выглядит пустым блоком, а не ошибкой.
+- `make test-unit` — без docker; `make test-integration` — testcontainers;
+  `make cover` — объединённое покрытие с проверкой порога.
 
 ## Архитектура
 
@@ -98,13 +100,18 @@ outbox-relay (`FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY`) → Kafka / Temporal.
 - **Workflow**: `testsuite.WorkflowTestSuite`; пять веток `OrderWorkflow` — accept,
   reject, таймаут подтверждения, отмена пользователем, отказ холда. Durable-таймеры
   проходят за миллисекунды; `time.Sleep` в тестах запрещён.
-- **Интеграционные**: репозитории на реальном Postgres через testcontainers-go
-  (`tests/integration`).
-- **E2E** (`tests/e2e`, `scripts/demo.sh`): happy path и «трудности» через сценарные
-  триггеры POS — `reject-next`, `ignore-next`, `go-offline`, `stop-item`,
-  `stop-option`, `raise-price`, `reset-menu`.
-- **Пороги**: покрытие доменных пакетов ≥ 70 %; `make lint test` зелёный локально
-  и в CI (GitHub Actions: lint + test + build).
+- **Интеграционные** (`tests/integration`, `make test-integration`): репозитории,
+  активности workflow, relay и проекции на реальном Postgres через testcontainers-go.
+  Схема и демо-данные накатываются тем же кодом, что и на стенде.
+- **E2E** — `scripts/demo.sh` (`make demo`): 22 сценария с ассертами, включая
+  «трудности» через сценарные триггеры POS — `reject-next`, `ignore-next`,
+  `go-offline`, `stop-item`, `stop-option`, `raise-price`, `reset-menu`.
+  Отдельного `tests/e2e` нет намеренно: Go-двойник демо-прогона дублировал бы
+  его, ничего не добавляя.
+- **Пороги**: покрытие доменных пакетов ≥ 70 %, проверяется `make cover`
+  (`scripts/check-coverage.sh`, список пакетов — в нём же). `make lint test`
+  зелёный локально и в CI (`.github/workflows/ci.yml`:
+  lint + test + build + e2e + diagrams).
 - Перед закрытием этапа — прогнать его **DoD из PLAN.md** дословно.
 
 ## Документация
