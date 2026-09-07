@@ -135,7 +135,7 @@ func TestServiceListVenues(t *testing.T) {
 	t.Run("открытость считается на момент запроса", func(t *testing.T) {
 		t.Parallel()
 
-		page, err := service.ListVenues(t.Context(), catalog.ListParams{Limit: 10})
+		page, err := service.ListVenues(testContext(t), catalog.ListParams{Limit: 10})
 		require.NoError(t, err)
 		require.Len(t, page.Items, 3)
 
@@ -151,7 +151,7 @@ func TestServiceListVenues(t *testing.T) {
 	t.Run("закрытому заведению проставлено время открытия", func(t *testing.T) {
 		t.Parallel()
 
-		page, err := service.ListVenues(t.Context(), catalog.ListParams{Limit: 10})
+		page, err := service.ListVenues(testContext(t), catalog.ListParams{Limit: 10})
 		require.NoError(t, err)
 
 		for i := range page.Items {
@@ -167,7 +167,7 @@ func TestServiceListVenues(t *testing.T) {
 	t.Run("open_now убирает закрытые", func(t *testing.T) {
 		t.Parallel()
 
-		page, err := service.ListVenues(t.Context(), catalog.ListParams{OpenNow: true, Limit: 10})
+		page, err := service.ListVenues(testContext(t), catalog.ListParams{OpenNow: true, Limit: 10})
 		require.NoError(t, err)
 
 		names := make([]string, 0, len(page.Items))
@@ -181,11 +181,11 @@ func TestServiceListVenues(t *testing.T) {
 	t.Run("расстояние считается только с координатами", func(t *testing.T) {
 		t.Parallel()
 
-		withoutPoint, err := service.ListVenues(t.Context(), catalog.ListParams{Limit: 10})
+		withoutPoint, err := service.ListVenues(testContext(t), catalog.ListParams{Limit: 10})
 		require.NoError(t, err)
 		assert.Nil(t, withoutPoint.Items[0].DistanceM)
 
-		withPoint, err := service.ListVenues(t.Context(), catalog.ListParams{Point: &center, Limit: 10})
+		withPoint, err := service.ListVenues(testContext(t), catalog.ListParams{Point: &center, Limit: 10})
 		require.NoError(t, err)
 		require.NotNil(t, withPoint.Items[0].DistanceM)
 	})
@@ -193,19 +193,19 @@ func TestServiceListVenues(t *testing.T) {
 	t.Run("сортировка по расстоянию без координат — ошибка, а не тихий алфавит", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := service.ListVenues(t.Context(), catalog.ListParams{Sort: catalog.SortByDistance, Limit: 10})
+		_, err := service.ListVenues(testContext(t), catalog.ListParams{Sort: catalog.SortByDistance, Limit: 10})
 		require.ErrorIs(t, err, catalog.ErrDistanceSortWithoutPoint)
 	})
 
 	t.Run("страницы идут по курсору и не повторяются", func(t *testing.T) {
 		t.Parallel()
 
-		first, err := service.ListVenues(t.Context(), catalog.ListParams{Limit: 2})
+		first, err := service.ListVenues(testContext(t), catalog.ListParams{Limit: 2})
 		require.NoError(t, err)
 		require.Len(t, first.Items, 2)
 		require.NotEmpty(t, first.NextCursor)
 
-		second, err := service.ListVenues(t.Context(), catalog.ListParams{Limit: 2, Cursor: first.NextCursor})
+		second, err := service.ListVenues(testContext(t), catalog.ListParams{Limit: 2, Cursor: first.NextCursor})
 		require.NoError(t, err)
 		require.Len(t, second.Items, 1)
 		assert.Empty(t, second.NextCursor, "последняя страница курсора не отдаёт")
@@ -215,7 +215,7 @@ func TestServiceListVenues(t *testing.T) {
 	t.Run("подделанный курсор отклоняется", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := service.ListVenues(t.Context(), catalog.ListParams{Limit: 2, Cursor: "!!!"})
+		_, err := service.ListVenues(testContext(t), catalog.ListParams{Limit: 2, Cursor: "!!!"})
 		require.ErrorIs(t, err, paging.ErrBadCursor)
 	})
 }
@@ -230,7 +230,7 @@ func TestServiceGetVenue(t *testing.T) {
 	t.Run("найденное заведение приходит с расчётом открытости", func(t *testing.T) {
 		t.Parallel()
 
-		view, err := service.GetVenue(t.Context(), venueID(1), nil)
+		view, err := service.GetVenue(testContext(t), venueID(1), nil)
 		require.NoError(t, err)
 		assert.True(t, view.IsOpenNow)
 		assert.Nil(t, view.NextOpenAt, "у открытого заведения обещать открытие незачем")
@@ -239,7 +239,7 @@ func TestServiceGetVenue(t *testing.T) {
 	t.Run("чужой идентификатор — не найдено", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := service.GetVenue(t.Context(), venueID(9), nil)
+		_, err := service.GetVenue(testContext(t), venueID(9), nil)
 		require.ErrorIs(t, err, catalog.ErrVenueNotFound)
 	})
 }
@@ -254,7 +254,7 @@ func TestServiceOpenNowByVenueIDs(t *testing.T) {
 	}}
 	service := catalog.NewService(repo, catalog.WithClock(func() time.Time { return mondayNoon(t) }))
 
-	open, err := service.OpenNowByVenueIDs(t.Context(), []uuid.UUID{venueID(1), venueID(2)})
+	open, err := service.OpenNowByVenueIDs(testContext(t), []uuid.UUID{venueID(1), venueID(2)})
 	require.NoError(t, err)
 
 	assert.True(t, open[venueID(1)])

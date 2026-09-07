@@ -21,7 +21,7 @@ func testRouter(t *testing.T, health *httpx.Health) http.Handler {
 	t.Helper()
 
 	// Логи тестов не нужны в выводе.
-	log := slog.New(slog.DiscardHandler)
+	log := slog.New(discardHandler())
 
 	return httpx.NewRouter(log, health)
 }
@@ -33,7 +33,7 @@ func TestLivenessIgnoresDependencies(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	testRouter(t, health).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", http.NoBody))
+	testRouter(t, health).ServeHTTP(rec, httptest.NewRequestWithContext(testContext(t), http.MethodGet, "/healthz", http.NoBody))
 
 	// Ключевое различие проб: упавшая зависимость не повод перезапускать
 	// живой процесс — рестарт не поднимет чужую БД.
@@ -48,7 +48,7 @@ func TestReadinessReportsFailingCheck(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	testRouter(t, health).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", http.NoBody))
+	testRouter(t, health).ServeHTTP(rec, httptest.NewRequestWithContext(testContext(t), http.MethodGet, "/readyz", http.NoBody))
 
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
@@ -69,7 +69,7 @@ func TestReadinessReportsFailingCheck(t *testing.T) {
 
 func TestReadinessWithoutChecksIsReady(t *testing.T) {
 	rec := httptest.NewRecorder()
-	testRouter(t, httpx.NewHealth()).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", http.NoBody))
+	testRouter(t, httpx.NewHealth()).ServeHTTP(rec, httptest.NewRequestWithContext(testContext(t), http.MethodGet, "/readyz", http.NoBody))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
@@ -82,7 +82,7 @@ func TestRequestIDGeneratedAndReturned(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/probe", http.NoBody))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(testContext(t), http.MethodGet, "/probe", http.NoBody))
 
 	assert.NotEmpty(t, seen, "хендлер видит request-id в контексте")
 	assert.Equal(t, seen, rec.Header().Get(httpx.HeaderRequestID), "клиент получает тот же id")
@@ -97,7 +97,7 @@ func TestRequestIDFromClientIsPreserved(t *testing.T) {
 		seen = httpx.RequestIDFrom(r.Context())
 	})
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/probe", http.NoBody)
+	req := httptest.NewRequestWithContext(testContext(t), http.MethodGet, "/probe", http.NoBody)
 	req.Header.Set(httpx.HeaderRequestID, incoming)
 
 	rec := httptest.NewRecorder()
@@ -116,7 +116,7 @@ func TestPanicBecomesInternalError(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	assert.NotPanics(t, func() {
-		r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/probe", http.NoBody))
+		r.ServeHTTP(rec, httptest.NewRequestWithContext(testContext(t), http.MethodGet, "/probe", http.NoBody))
 	}, "паника в хендлере не должна ронять процесс")
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -125,7 +125,7 @@ func TestPanicBecomesInternalError(t *testing.T) {
 func testRouterWith(t *testing.T, h http.HandlerFunc) http.Handler {
 	t.Helper()
 
-	log := slog.New(slog.DiscardHandler)
+	log := slog.New(discardHandler())
 
 	r := httpx.NewRouter(log, httpx.NewHealth())
 	r.Get("/probe", h)
@@ -134,7 +134,7 @@ func testRouterWith(t *testing.T, h http.HandlerFunc) http.Handler {
 }
 
 func TestServerShutsDownOnContextCancel(t *testing.T) {
-	log := slog.New(slog.DiscardHandler)
+	log := slog.New(discardHandler())
 	srv := httpx.NewServer(
 		config.HTTP{Addr: "127.0.0.1:0"},
 		config.App{ShutdownTimeout: 5 * time.Second},
@@ -142,7 +142,7 @@ func TestServerShutsDownOnContextCancel(t *testing.T) {
 		log,
 	)
 
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(testContext(t))
 	done := make(chan error, 1)
 
 	go func() { done <- srv.Run(ctx) }()
@@ -161,7 +161,7 @@ func TestAccessLogWriterSupportsFlush(t *testing.T) {
 
 	isFlusher := false
 
-	handler := httpx.AccessLog(slog.New(slog.DiscardHandler))(
+	handler := httpx.AccessLog(slog.New(discardHandler()))(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			flusher, ok := w.(http.Flusher)
 			isFlusher = ok
@@ -175,7 +175,7 @@ func TestAccessLogWriterSupportsFlush(t *testing.T) {
 		}))
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/stream", http.NoBody)
+	request := httptest.NewRequestWithContext(testContext(t), http.MethodGet, "/stream", http.NoBody)
 	handler.ServeHTTP(recorder, request)
 
 	require.True(t, isFlusher, "обёртка обязана оставаться Flusher'ом")

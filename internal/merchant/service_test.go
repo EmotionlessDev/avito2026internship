@@ -123,7 +123,7 @@ func TestImportMenuAppliesChanges(t *testing.T) {
 
 	snapshot := baseSnapshot(snapshotItem("hv-001", "Хачапури по-аджарски", 52000))
 
-	result, err := service.ImportMenu(t.Context(), snapshot)
+	result, err := service.ImportMenu(testContext(t), snapshot)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, result.Created)
@@ -143,10 +143,10 @@ func TestImportMenuIsIdempotent(t *testing.T) {
 
 	snapshot := baseSnapshot(snapshotItem("hv-001", "Хачапури по-аджарски", 52000))
 
-	first, err := service.ImportMenu(t.Context(), snapshot)
+	first, err := service.ImportMenu(testContext(t), snapshot)
 	require.NoError(t, err)
 
-	second, err := service.ImportMenu(t.Context(), snapshot)
+	second, err := service.ImportMenu(testContext(t), snapshot)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, first.Created)
@@ -170,13 +170,13 @@ func TestImportMenuAppliesRollbackToPreviousSnapshot(t *testing.T) {
 	versionA := baseSnapshot(snapshotItem("hv-001", "Хачапури по-аджарски", 52000))
 	versionB := baseSnapshot(snapshotItem("hv-001", "Хачапури по-аджарски", 56000))
 
-	_, err := service.ImportMenu(t.Context(), versionA)
+	_, err := service.ImportMenu(testContext(t), versionA)
 	require.NoError(t, err)
 
-	_, err = service.ImportMenu(t.Context(), versionB)
+	_, err = service.ImportMenu(testContext(t), versionB)
 	require.NoError(t, err)
 
-	back, err := service.ImportMenu(t.Context(), versionA)
+	back, err := service.ImportMenu(testContext(t), versionA)
 	require.NoError(t, err)
 
 	assert.False(t, back.Idempotent, "возврат к прежнему меню — полноценный импорт")
@@ -195,7 +195,7 @@ func TestImportMenuRejectsBrokenSnapshot(t *testing.T) {
 		}},
 	}
 
-	_, err := service.ImportMenu(t.Context(), broken)
+	_, err := service.ImportMenu(testContext(t), broken)
 	require.ErrorIs(t, err, merchant.ErrInvalidSnapshot)
 	assert.Empty(t, store.applied, "битый снапшот не доезжает до базы")
 }
@@ -205,7 +205,7 @@ func TestSetAvailabilityRejectsEmptyRequest(t *testing.T) {
 
 	service := merchant.NewService(&fakeStore{}, merchant.UnsupportedScheduler{})
 
-	_, err := service.SetAvailability(t.Context(), merchant.AvailabilityRequest{})
+	_, err := service.SetAvailability(testContext(t), merchant.AvailabilityRequest{})
 	require.ErrorIs(t, err, merchant.ErrEmptyAvailability)
 }
 
@@ -219,7 +219,7 @@ func TestSetAvailabilityRejectsScheduledReturnBeforeWriting(t *testing.T) {
 
 	until := time.Date(2026, 9, 7, 20, 0, 0, 0, time.UTC)
 
-	_, err := service.SetAvailability(t.Context(), merchant.AvailabilityRequest{
+	_, err := service.SetAvailability(testContext(t), merchant.AvailabilityRequest{
 		Items: []merchant.AvailabilityChange{
 			{ExternalID: "hv-004", IsAvailable: false, Until: &until},
 		},
@@ -240,7 +240,7 @@ func TestSetAvailabilitySchedulesReturnWhenPlannerAvailable(t *testing.T) {
 
 	until := time.Date(2026, 9, 7, 20, 0, 0, 0, time.UTC)
 
-	result, err := service.SetAvailability(t.Context(), merchant.AvailabilityRequest{
+	result, err := service.SetAvailability(testContext(t), merchant.AvailabilityRequest{
 		Items: []merchant.AvailabilityChange{
 			{ExternalID: "hv-004", IsAvailable: false, Until: &until},
 		},
@@ -259,7 +259,7 @@ func TestSetAvailabilityWithoutScheduledReturn(t *testing.T) {
 	store := &fakeStore{}
 	service := merchant.NewService(store, merchant.UnsupportedScheduler{})
 
-	result, err := service.SetAvailability(t.Context(), merchant.AvailabilityRequest{
+	result, err := service.SetAvailability(testContext(t), merchant.AvailabilityRequest{
 		Items:   []merchant.AvailabilityChange{{ExternalID: "hv-004", IsAvailable: false}},
 		Options: []merchant.AvailabilityChange{{ExternalID: "cheese", IsAvailable: false}},
 	})
@@ -279,7 +279,7 @@ func TestAuthenticate(t *testing.T) {
 	t.Run("верный ключ", func(t *testing.T) {
 		t.Parallel()
 
-		got, err := service.Authenticate(t.Context(), "kitchen_demo_key")
+		got, err := service.Authenticate(testContext(t), "kitchen_demo_key")
 		require.NoError(t, err)
 		assert.Equal(t, venueID, got)
 	})
@@ -287,7 +287,7 @@ func TestAuthenticate(t *testing.T) {
 	t.Run("чужой ключ", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := service.Authenticate(t.Context(), "не тот ключ")
+		_, err := service.Authenticate(testContext(t), "не тот ключ")
 		require.ErrorIs(t, err, merchant.ErrUnauthorized)
 	})
 }

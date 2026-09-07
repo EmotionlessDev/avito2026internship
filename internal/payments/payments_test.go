@@ -34,7 +34,7 @@ func TestMockAuthorizeIsDeterministic(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			ref, err := provider.Authorize(t.Context(), orderID, tt.amountMinor)
+			ref, err := provider.Authorize(testContext(t), orderID, tt.amountMinor)
 			if tt.wantErr {
 				require.ErrorIs(t, err, payments.ErrDeclined)
 
@@ -54,10 +54,10 @@ func TestMockAuthorizeIsIdempotent(t *testing.T) {
 
 	provider := payments.NewMock()
 
-	first, err := provider.Authorize(t.Context(), orderID, 118900)
+	first, err := provider.Authorize(testContext(t), orderID, 118900)
 	require.NoError(t, err)
 
-	second, err := provider.Authorize(t.Context(), orderID, 118900)
+	second, err := provider.Authorize(testContext(t), orderID, 118900)
 	require.NoError(t, err)
 
 	assert.Equal(t, first, second)
@@ -68,12 +68,12 @@ func TestMockCaptureAndVoid(t *testing.T) {
 
 	provider := payments.NewMock()
 
-	ref, err := provider.Authorize(t.Context(), orderID, 118900)
+	ref, err := provider.Authorize(testContext(t), orderID, 118900)
 	require.NoError(t, err)
 
-	require.NoError(t, provider.Capture(t.Context(), ref))
-	require.NoError(t, provider.Void(t.Context(), ref))
+	require.NoError(t, provider.Capture(testContext(t), ref))
+	require.NoError(t, provider.Void(testContext(t), ref))
 
-	require.Error(t, provider.Capture(t.Context(), ""), "списывать нечего")
-	require.Error(t, provider.Void(t.Context(), ""), "отменять нечего")
+	require.Error(t, provider.Capture(testContext(t), ""), "списывать нечего")
+	require.Error(t, provider.Void(testContext(t), ""), "отменять нечего")
 }
