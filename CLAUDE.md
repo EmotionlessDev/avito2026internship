@@ -31,12 +31,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make generate` — oapi-codegen из `api/*.openapi.yaml`; сгенерированный код коммитится.
 - `make migrate` / `make seed` — goose (миграции через embed); сид: 3 заведения,
   ~25 позиций, 2 демо-пользователя.
-- `scripts/demo.sh` — 22 сценария (14 U + 8 M) с ассертами; e2e-доказательство
-  критерия приёмки «выполняет все бизнес-сценарии».
+- `make demo` (`scripts/demo.sh`) — 22 сценария (14 U + 8 M) с ассертами; e2e-доказательство
+  критерия приёмки «выполняет все бизнес-сценарии». Раннер — контейнер из
+  `build/Dockerfile.demo`, профиль `demo` в compose.
+- `make check-diagrams` — все Mermaid-блоки markdown через `mermaid-cli`:
+  сломанная диаграмма на GitHub выглядит пустым блоком, а не ошибкой.
 
 ## Архитектура
 
-Три Go-бинаря в одном модуле (детали — DESIGN §4):
+Три Go-бинаря в одном модуле (C4-диаграммы — README, раздел «Архитектура»):
 
 - `cmd/kitchen-api` — HTTP (chi), контуры public + merchant; состояние читает
   **только из Postgres**.
@@ -99,15 +102,20 @@ outbox-relay (`FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY`) → Kafka / Temporal.
   (`tests/integration`).
 - **E2E** (`tests/e2e`, `scripts/demo.sh`): happy path и «трудности» через сценарные
   триггеры POS — `reject-next`, `ignore-next`, `go-offline`, `stop-item`,
-  `stop-option`, `raise-price`.
+  `stop-option`, `raise-price`, `reset-menu`.
 - **Пороги**: покрытие доменных пакетов ≥ 70 %; `make lint test` зелёный локально
   и в CI (GitHub Actions: lint + test + build).
 - Перед закрытием этапа — прогнать его **DoD из PLAN.md** дословно.
 
 ## Документация
 
-- «У каждой диаграммы один дом»: C4 и ERD после этапа 10 живут в README,
-  CJM — в DESIGN §2–3. Копий не заводить — ставить ссылку.
+- «У каждой диаграммы один дом»: C4 и ERD живут в README (разделы «Архитектура»
+  и «Схема БД»), CJM — в `docs/DESIGN.md` §2–3, упрощения и масштабирование —
+  в README. Копий не заводить — ставить ссылку.
+- Решения, которые дорого менять, — в `docs/adr/` по файлу на решение
+  (Контекст / Решение / Последствия / Отвергнутые альтернативы). Расходится
+  реализация — сначала правится ADR, потом код.
 - Все диаграммы — Mermaid инлайном в markdown (обоснование — PLAN, этап 10);
   PlantUML не использовать.
-- `README.md` — пока стаб; наполняется по этапам, разделы-заглушки не удалять.
+- `README.md` — главный документ проекта, а не стаб: описание, C4, схема БД,
+  таблица 22 сценариев, упрощения, ссылки на ADR. Правится вместе с кодом.

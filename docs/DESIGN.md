@@ -163,120 +163,20 @@ sequenceDiagram
 
 ## 4. Архитектура
 
-### 4.1. C4 Level 1 — Контекст
+Диаграммы C4 — Level 1 (контекст), Level 2 (контейнеры) и Level 3 (компоненты
+модуля заказа) — живут в [README → Архитектура](../README.md#архитектура).
 
-```mermaid
-flowchart TB
-    user["👤 <b>Покупатель</b><br/><i>«Person»</i><br/>Ищет и заказывает еду"]
-    staff["👤 <b>Сотрудник заведения</b><br/><i>«Person»</i><br/>Ведёт меню и заказы"]
-
-    kitchen["<b>Авито.Кухня</b><br/><i>«Software System»</i><br/>Каталог, заказы, интеграция<br/>с заведениями"]
-
-    pos["<b>POS заведения</b><br/><i>«External System»</i><br/>Собственная учётная система<br/>ресторана"]
-    avito["<b>Авито Core</b><br/><i>«External System»</i><br/>Профили, авторизация<br/><small>вне MVP — заглушка</small>"]
-    pay["<b>Платёжный провайдер</b><br/><i>«External System»</i><br/><small>вне MVP — мок</small>"]
-
-    user -->|"HTTPS / JSON<br/>смотрит каталог,<br/>оформляет заказ"| kitchen
-    staff -->|"работает в своей системе"| pos
-    pos <-->|"HTTPS / JSON<br/>меню, стоп-листы,<br/>заказы"| kitchen
-    kitchen -.->|"user_id из JWT"| avito
-    kitchen -.->|"hold / capture / void"| pay
-
-    style kitchen fill:#1168bd,stroke:#0b4884,color:#fff
-    style user fill:#08427b,stroke:#052e56,color:#fff
-    style staff fill:#08427b,stroke:#052e56,color:#fff
-    style pos fill:#999,stroke:#6b6b6b,color:#fff
-    style avito fill:#999,stroke:#6b6b6b,color:#fff
-    style pay fill:#999,stroke:#6b6b6b,color:#fff
-```
-
-### 4.2. C4 Level 2 — Контейнеры
-
-```mermaid
-flowchart TB
-    user["👤 Покупатель<br/><i>«Person»</i>"]
-
-    subgraph sys["Авито.Кухня"]
-        direction TB
-        api["<b>kitchen-api</b><br/><i>«Container: Go, chi»</i><br/>Public + Merchant HTTP API,<br/>валидация, корзина"]
-        worker["<b>kitchen-worker</b><br/><i>«Container: Go»</i><br/>Temporal worker, Kafka-консьюмеры,<br/>outbox-relay"]
-        db[("<b>PostgreSQL 16</b><br/><i>«Container: Database»</i><br/>Источник истины:<br/>каталог, заказы, outbox")]
-        kafka[["<b>Kafka (KRaft)</b><br/><i>«Container: Message Broker»</i><br/>Шина доменных событий"]]
-        temporal["<b>Temporal</b><br/><i>«Container: Workflow Engine»</i><br/>Durable-оркестрация<br/>жизненного цикла заказа"]
-    end
-
-    subgraph demo["Демо-стенд (тот же репозиторий)"]
-        pos["<b>merchant-pos</b><br/><i>«Container: Go + SQLite»</i><br/>Пример заведения:<br/>своё меню, свои заказы"]
-    end
-
-    user -->|"JSON/HTTPS"| api
-    api -->|"SQL, pgx"| db
-    api -->|"StartWorkflow<br/>SignalWorkflow"| temporal
-    worker -->|"SQL"| db
-    worker -->|"produce / consume"| kafka
-    worker -->|"poll task queue"| temporal
-    temporal -->|"activities"| worker
-    worker -->|"webhook + HMAC<br/>новый заказ"| pos
-    pos -->|"меню, стоп-листы,<br/>accept/reject/ready"| api
-
-    style api fill:#1168bd,stroke:#0b4884,color:#fff
-    style worker fill:#1168bd,stroke:#0b4884,color:#fff
-    style pos fill:#2d8659,stroke:#1d5c3c,color:#fff
-    style db fill:#438dd5,stroke:#2e6295,color:#fff
-    style kafka fill:#438dd5,stroke:#2e6295,color:#fff
-    style temporal fill:#438dd5,stroke:#2e6295,color:#fff
-    style user fill:#08427b,stroke:#052e56,color:#fff
-```
-
-**Почему API и Worker — разные контейнеры.** У них разный профиль нагрузки и разные
-причины падать. API обязан отвечать за миллисекунды и масштабируется по RPS; worker
-держит долгие соединения с Temporal и Kafka и масштабируется по объёму событий.
-Падение worker'а не должно ронять выдачу каталога — заказы просто накапливаются в outbox.
-
-### 4.3. C4 Level 3 — Компоненты `kitchen-api` (модуль заказа)
-
-```mermaid
-flowchart TB
-    subgraph api["kitchen-api"]
-        direction TB
-        mw["<b>httpx.Middleware</b><br/>request-id, recovery, logging,<br/>user/api-key auth, problem+json"]
-
-        oh["<b>OrderHandler</b><br/><i>«Component»</i><br/>POST /v1/orders<br/>POST /v1/orders/:id/cancel"]
-        mh["<b>MerchantOrderHandler</b><br/><i>«Component»</i><br/>accept / reject / ready"]
-
-        os["<b>OrderService</b><br/><i>«Component»</i><br/>Оркестрация создания заказа,<br/>идемпотентность"]
-        cv["<b>CartValidator</b><br/><i>«Component»</i><br/>Каскад проверок → issues[]"]
-        fsm["<b>order.StateMachine</b><br/><i>«Component»</i><br/>Матрица переходов,<br/>кто имеет право"]
-
-        orepo["<b>OrderRepository</b><br/><i>«Component»</i><br/>pgx, транзакции"]
-        obox["<b>OutboxWriter</b><br/><i>«Component»</i><br/>Пишет событие в той же<br/>транзакции, что и заказ"]
-        tcl["<b>TemporalClient</b><br/><i>«Component»</i><br/>StartWorkflow / Signal"]
-    end
-
-    db[("PostgreSQL")]
-    tmp["Temporal"]
-
-    mw --> oh & mh
-    oh --> os
-    mh --> fsm
-    os --> cv
-    os --> fsm
-    os --> orepo
-    os --> obox
-    os --> tcl
-    mh --> tcl
-    orepo --> db
-    obox --> db
-    tcl --> tmp
-
-    style os fill:#1168bd,stroke:#0b4884,color:#fff
-    style cv fill:#1168bd,stroke:#0b4884,color:#fff
-    style fsm fill:#1168bd,stroke:#0b4884,color:#fff
-```
+У каждой диаграммы один дом: критерий приёмки требует C4 именно в README,
+поэтому копии здесь нет — есть ссылка. Здесь остаётся то, чего в README нет:
+разбор решений (§5), жизненный цикл заказа (§6) и состав API (§8).
 
 ---
 
 ## 5. Главный ADR: кто за что отвечает — Postgres, Kafka, Temporal
+
+Здесь — как это устроено и почему; формальные записи решений с отвергнутыми
+альтернативами лежат рядом: [ADR 0001](adr/0001-postgres-kafka-temporal.md)
+(границы трёх технологий) и [ADR 0002](adr/0002-transactional-outbox.md) (outbox).
 
 Это решение, которое придётся защищать на интервью в первую очередь. Правило одно:
 
@@ -423,7 +323,7 @@ sequenceDiagram
 
     T->>A: SendOrderToVenue
     A->>POS: POST {webhook}/orders + HMAC
-    Note over A,POS: retry 5× с backoff;<br/>если POS лежит — заберёт поллингом
+    Note over A,POS: retry 5× с backoff,<br/>если POS лежит — заберёт поллингом
 
     T->>A: SetStatus(placed) + Outbox(order.placed)
     A->>K: order.placed
@@ -483,324 +383,20 @@ sequenceDiagram
 
 ## 7. Модель данных
 
-Общие правила схемы:
+ERD всех 20 таблиц, общие правила схемы и разбор ключевых решений —
+в [README → Схема БД](../README.md#схема-бд): описание схемы БД тоже прямой
+критерий приёмки, и дом у него там.
 
-- **Деньги** — `bigint` в копейках (`*_minor`). Никогда не `float`, никогда не `numeric`
-  для арифметики в коде.
-- **Идентификаторы** — `uuid` (v7, k-sortable: локальность по времени в B-tree индексе).
-- **Enum'ы** — `text` + `CHECK`, а не Postgres `ENUM`: добавить значение в `CHECK` —
-  обычная миграция, удалить из `ENUM` — нельзя вовсе.
-- **Время** — `timestamptz`, всегда UTC в базе; часовой пояс заведения хранится отдельно
-  и применяется при расчёте расписания.
-- **Удаление** — мягкое (`is_archived`), потому что на позицию ссылаются исторические заказы.
+Три решения этой модели разобраны отдельными ADR, потому что их дороже всего
+менять:
 
-### 7.1. Заведения и меню
+- [ADR 0008](adr/0008-order-items-snapshot.md) — состав заказа хранится снапшотом,
+  а не ссылками на меню: чек выданного заказа не меняется задним числом.
+- [ADR 0003](adr/0003-money-bigint-minor.md) — деньги в копейках, `bigint`.
+- [ADR 0005](adr/0005-uuid-v7-in-app.md) — UUID v7, генерирует приложение.
 
-```mermaid
-erDiagram
-    VENUES ||--o{ VENUE_API_KEYS : "аутентифицируется"
-    VENUES ||--o{ VENUE_WORK_HOURS : "работает по"
-    VENUES ||--o| VENUE_WEBHOOKS : "принимает заказы на"
-    VENUES ||--o{ MENU_CATEGORIES : "разделы"
-    VENUES ||--o{ MENU_ITEMS : "позиции"
-    VENUES ||--o{ MENU_IMPORTS : "аудит синхронизаций"
-    MENU_CATEGORIES ||--o{ MENU_ITEMS : "содержит"
-    MENU_ITEMS ||--o{ MENU_OPTION_GROUPS : "модификаторы"
-    MENU_OPTION_GROUPS ||--o{ MENU_OPTIONS : "варианты"
-
-    VENUES {
-        uuid id PK
-        text slug UK
-        text name
-        text address_text
-        double lat
-        double lon
-        text timezone "Europe/Moscow"
-        text status "active|suspended|draft"
-        bool is_accepting_orders "пауза кухни"
-        bigint min_order_amount_minor
-        bigint delivery_fee_minor
-        int delivery_radius_m
-        int avg_prep_minutes
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    VENUE_API_KEYS {
-        uuid id PK
-        uuid venue_id FK
-        text name "подпись ключа: demo, prod"
-        text key_prefix "для поиска"
-        text key_hash "sha256, не сам ключ"
-        timestamptz created_at
-        timestamptz revoked_at
-    }
-    VENUE_WORK_HOURS {
-        uuid id PK
-        uuid venue_id FK
-        smallint weekday "0=Пн"
-        time opens_at
-        time closes_at "меньше opens_at = через полночь"
-    }
-    VENUE_WEBHOOKS {
-        uuid venue_id PK
-        text url
-        text secret "для HMAC"
-        bool is_active
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    MENU_CATEGORIES {
-        uuid id PK
-        uuid venue_id FK
-        text external_id "ID в системе заведения"
-        text name
-        int position
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    MENU_ITEMS {
-        uuid id PK
-        uuid venue_id FK
-        uuid category_id FK
-        text external_id "UK вместе с venue_id"
-        text name
-        text description
-        bigint price_minor
-        int weight_grams
-        int position "порядок в категории"
-        bool is_available "стоп-лист"
-        bool is_archived "исчезло из меню"
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    MENU_OPTION_GROUPS {
-        uuid id PK
-        uuid item_id FK
-        text external_id
-        text name "Размер, Добавки"
-        int min_choices
-        int max_choices
-        int position "порядок показа"
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    MENU_OPTIONS {
-        uuid id PK
-        uuid group_id FK
-        text external_id
-        text name
-        bigint price_delta_minor "может быть отрицательной"
-        int position
-        bool is_available
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    MENU_IMPORTS {
-        uuid id PK
-        uuid venue_id FK
-        text payload_hash "идемпотентность"
-        int items_created
-        int items_updated
-        int items_archived
-        timestamptz started_at
-        timestamptz finished_at
-    }
-```
-
-**Ключевое решение — как связать данные платформы с данными заведения.**
-`UNIQUE(venue_id, external_id)`. Заведение оперирует **своими** идентификаторами
-(артикул из своей 1С/iiko), платформа — своими `uuid`. Связь — составной естественный ключ.
-Это значит:
-
-- заведение может слать импорт, не зная про UUID платформы;
-- повторный импорт того же снапшота — обновление, а не дубли;
-- если заведение переедет на другую CRM и сменит артикулы, мы это увидим как
-  «архивировали 24 позиции, создали 24 позиции» в `menu_imports`, а не как тихую порчу данных.
-
-### 7.2. Корзина и заказы
-
-```mermaid
-erDiagram
-    USERS ||--o| CARTS : "одна активная"
-    USERS ||--o{ ORDERS : "оформляет"
-    CARTS ||--o{ CART_ITEMS : ""
-    VENUES ||--o{ ORDERS : "исполняет"
-    ORDERS ||--|{ ORDER_ITEMS : "снапшот состава"
-    ORDERS ||--o{ ORDER_STATUS_HISTORY : "аудит"
-    ORDERS ||--o| PAYMENTS : "холд/списание"
-    MENU_ITEMS ||--o{ CART_ITEMS : ""
-    MENU_ITEMS ||--o{ ORDER_ITEMS : ""
-
-    USERS {
-        uuid id PK
-        text phone UK
-        text name
-        timestamptz created_at
-    }
-    CARTS {
-        uuid id PK
-        uuid user_id FK "UK: одна корзина"
-        uuid venue_id FK "корзина = одно заведение, NULL у пустой"
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    CART_ITEMS {
-        uuid id PK
-        uuid cart_id FK
-        uuid menu_item_id FK
-        int qty
-        jsonb options "выбранные модификаторы"
-        bigint added_price_minor "для детекта PRICE_CHANGED"
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    ORDERS {
-        uuid id PK
-        text number UK "К-240915-0042, человекочитаемый"
-        uuid user_id FK
-        uuid venue_id FK
-        text status
-        bigint items_amount_minor
-        bigint delivery_fee_minor
-        bigint total_amount_minor
-        text delivery_address
-        double delivery_lat
-        double delivery_lon
-        text contact_phone
-        text comment "«позвонить за 10 минут»"
-        int eta_minutes
-        text idempotency_key "UK вместе с user_id"
-        text workflow_id "связь с Temporal"
-        text cancel_reason
-        timestamptz created_at
-        timestamptz updated_at
-        timestamptz placed_at
-        timestamptz completed_at
-    }
-    ORDER_ITEMS {
-        uuid id PK
-        uuid order_id FK
-        uuid menu_item_id FK "может быть archived позже"
-        text external_item_id "чтобы POS понял"
-        text name_snapshot "название на момент заказа"
-        bigint price_minor_snapshot "цена на момент заказа"
-        int qty
-        jsonb options_snapshot
-        bigint total_minor
-    }
-    ORDER_STATUS_HISTORY {
-        uuid id PK
-        uuid order_id FK
-        text from_status
-        text to_status
-        text actor_type "user|venue|system"
-        text reason
-        timestamptz created_at
-    }
-    PAYMENTS {
-        uuid id PK
-        uuid order_id FK "UK: один платёж на заказ"
-        text status "authorized|captured|voided"
-        bigint amount_minor
-        text provider_ref
-        timestamptz created_at
-        timestamptz updated_at
-    }
-```
-
-**Почему `order_items` — снапшот, а не ссылка.** Заведение через час поднимет цену или
-архивирует позицию. Чек уже выданного заказа меняться не должен — ни для пользователя,
-ни для взаиморасчётов. Ссылка `menu_item_id` остаётся для аналитики, но все отображаемые
-и денежные поля скопированы в момент оформления. То же и с `external_item_id`: POS должен
-получить заказ в своих артикулах, даже если позицию потом удалили.
-
-### 7.3. Инфраструктурные таблицы
-
-```mermaid
-erDiagram
-    OUTBOX {
-        bigint id PK "bigserial; про порядок — см. §5"
-        uuid event_id UK "для дедупликации у консьюмера"
-        text aggregate_type "order|menu_item|menu_option|venue"
-        uuid aggregate_id "= ключ партиции Kafka"
-        text event_type "order.placed"
-        jsonb payload
-        jsonb headers "trace_id"
-        timestamptz created_at
-        timestamptz published_at "NULL = не отправлено"
-        int attempts
-        text last_error
-    }
-    PROCESSED_EVENTS {
-        text consumer PK "search-indexer"
-        uuid event_id PK
-        timestamptz processed_at
-    }
-    SEARCH_ITEMS {
-        uuid item_id PK
-        uuid venue_id
-        text item_name
-        text description "вес C в search_vector"
-        text venue_name
-        text category_name "для выдачи"
-        bigint price_minor
-        bool is_available
-        bool venue_is_active
-        bool venue_is_accepting "пауза приёма (M7)"
-        double lat
-        double lon
-        timestamptz updated_at
-        tsvector search_vector "GENERATED, GIN-индекс"
-    }
-    VENUE_DAILY_STATS {
-        uuid venue_id PK
-        date stat_date PK "день в часовом поясе заведения"
-        int orders_total
-        int orders_completed
-        int orders_rejected
-        int orders_expired
-        bigint revenue_minor "по завершённым заказам"
-        bigint accept_seconds_total "слагаемое среднего"
-        int accept_count "делитель среднего"
-        timestamptz updated_at
-    }
-```
-
-`venue_daily_stats` — проекция `order-events` для сценария M8. Среднее время
-подтверждения хранится суммой и счётчиком, а не готовым средним: среднее нельзя
-досчитать инкрементально, а сумму и счётчик — можно. День считается в часовом
-поясе заведения и там, где витрина наполняется, и там, где читается: «сегодня»
-для владельца заведения — это его сегодня.
-
-Индексы, которые действительно нужны:
-
-```sql
--- outbox: только неопубликованные, в порядке записи
-CREATE INDEX idx_outbox_unpublished ON outbox (id) WHERE published_at IS NULL;
-
--- поиск: полнотекстовый + опечатки
-CREATE INDEX idx_search_vector ON search_items USING GIN (search_vector);
-CREATE INDEX idx_search_trgm   ON search_items USING GIN (item_name gin_trgm_ops);
-
--- лента заказов заведения (поллинг-фолбэк)
-CREATE INDEX idx_orders_venue_status ON orders (venue_id, status, created_at DESC);
-
--- меню заведения
-CREATE INDEX idx_items_venue_active ON menu_items (venue_id, category_id, position)
-    WHERE NOT is_archived;
-```
-
-Перечислены индексы, за которыми стоит отдельное решение. Кроме них в схеме
-есть обычные индексы по внешним ключам частых выборок — состав корзины и заказа,
-история статусов, расписание и категории заведения, лента заказов пользователя,
-поиск позиции по заведению в витрине. Уникальность `(venue_id, external_id)`,
-`(user_id, idempotency_key)` и `outbox.event_id` обеспечена ограничениями,
-отдельные индексы для них не нужны.
-
-Вставка в `outbox` шлёт `NOTIFY outbox_new` триггером на уровне выражения —
-relay просыпается на записи, а не ждёт следующего тика опроса. Опрос остаётся
-страховкой: уведомление не переживает разрыв соединения, строка в таблице
-переживает.
+Связь данных платформы с данными заведения — `UNIQUE(venue_id, external_id)` —
+разобрана в [README → О проекте](../README.md#о-проекте) и показана на ERD.
 
 ---
 
@@ -944,33 +540,9 @@ search_vector tsvector GENERATED ALWAYS AS (
 
 ---
 
-## 11. Осознанные упрощения
+## 11. Осознанные упрощения и путь наружу
 
-Каждое — сознательное решение с понятной ценой, а не «не успел».
-
-| Упрощение | Почему допустимо в MVP | Чего стоит | Путь наружу |
-|---|---|---|---|
-| **Нет авторизации** — `X-User-Id` в заголовке | Прямо разрешено заданием | Любой может подставить чужой id | Middleware уже кладёт user в context — замена на JWT не трогает хендлеры |
-| **Платежи замоканы** | Нет провайдера и PCI-контура | Не проверена реальная механика холдов | Интерфейс `payments.Provider` с 3 методами — подменяется реализацией |
-| **Зона доставки — радиус, не полигон** | Реальные зоны требуют PostGIS и данных | Неточность на границе | PostGIS + `ST_Contains`; схема уже хранит координаты |
-| **Курьеры замоканы** | Отдельный домен размером с этот проект | Нет реальных ETA | Отдельный сервис + activity в workflow |
-| **Одна активная корзина** | Так работает большинство фудтех-сервисов | Нельзя параллельно собирать два заказа | `UNIQUE(user_id)` → `UNIQUE(user_id, venue_id)` |
-| **JSON в Kafka без Schema Registry** | Один продюсер, версия в имени топика | Нет валидации совместимости | Schema Registry + protobuf, топик `.v2` |
-| **Outbox через polling, не CDC** | Debezium — отдельный кластер | Задержка до интервала опроса | `LISTEN/NOTIFY` снижает задержку до мс; далее — Debezium |
-| **Postgres FTS вместо ES** | Достаточно на объёмах MVP | Нет фасетов, сложного ранжирования | Консьюмер `search-indexer` — уже выделенная точка замены |
-| **Один инстанс всего** | Демо-стенд | Нет проверки на конкурентность реплик | Сервисы stateless; outbox-relay нужен `FOR UPDATE SKIP LOCKED` |
-| **«Открыто сейчас» и расстояние считаются в приложении, не в SQL** | Закрытый пул заведений; правило с работой через полночь и чужими поясами живёт в одной протестированной функции, а не дублируется в SQL | Выборка всех активных заведений на каждый запрос каталога | Материализованный флаг открытости в витрине и KNN-индекс PostGIS для расстояния — обе точки локальны в `internal/catalog` |
-
----
-
-## 12. Что дальше при масштабировании
-
-1. **Каталог отделяется от заказов** — разный профиль нагрузки (чтение ×1000 против записи).
-   Границы уже проведены по модулям `catalog` / `order`.
-2. **`search-indexer` переключается на Elasticsearch** — переигрыванием компактируемого
-   топика `catalog-events`, без миграции данных.
-3. **Outbox-relay заменяется на Debezium CDC** — снимает нагрузку опроса с основной БД.
-4. **Шардирование заказов по `venue_id`** — естественный ключ шардирования, заказы
-   разных заведений не связаны.
-5. **Доставка и оплата выносятся в отдельные сервисы** — в workflow это уже отдельные
-   activities, меняется только их реализация.
+Таблица упрощений с ценой каждого и путём наружу, а также план масштабирования —
+в README: [упрощения](../README.md#осознанные-упрощения) и
+[что дальше](../README.md#что-дальше-при-масштабировании). Задание просит
+обосновать упрощения именно там.
