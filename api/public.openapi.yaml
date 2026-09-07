@@ -306,6 +306,8 @@ paths:
 
         Если валидация нашла блокирующую проблему, ответ — `422` с кодом
         `CART_NOT_VALID` и тем же списком `issues[]`, что отдаёт `/cart/validate`.
+        Пустая корзина — тоже `422`, но с кодом `CART_EMPTY` и пустым `issues[]`:
+        проблем в ней нет, оформлять нечего.
       parameters:
         - name: Idempotency-Key
           in: header
@@ -338,7 +340,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: Корзину нельзя оформить
+          description: 'Корзину нельзя оформить: `CART_NOT_VALID` или `CART_EMPTY`'
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/CartNotValidProblem' }

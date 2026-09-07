@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Подпись — единственное, что отличает вызов платформы от постороннего
@@ -116,11 +117,11 @@ func TestPlatformErrorsAreComparable(t *testing.T) {
 	notFound := statusError(404, []byte(`{"code":"ORDER_NOT_FOUND"}`))
 	server := statusError(500, nil)
 
-	assert.ErrorIs(t, conflict, ErrTransitionRejected)
-	assert.ErrorIs(t, notFound, ErrOrderUnknownToPlatform)
+	require.ErrorIs(t, conflict, ErrTransitionRejected)
+	require.ErrorIs(t, notFound, ErrOrderUnknownToPlatform)
 
-	assert.NotErrorIs(t, server, ErrTransitionRejected)
-	assert.NotErrorIs(t, server, ErrOrderUnknownToPlatform,
+	require.NotErrorIs(t, server, ErrTransitionRejected)
+	require.NotErrorIs(t, server, ErrOrderUnknownToPlatform,
 		"временный сбой не должен выглядеть как окончательный отказ")
-	assert.NotErrorIs(t, conflict, ErrOrderUnknownToPlatform)
+	require.NotErrorIs(t, conflict, ErrOrderUnknownToPlatform)
 }

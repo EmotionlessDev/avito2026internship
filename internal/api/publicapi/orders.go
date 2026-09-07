@@ -138,6 +138,22 @@ func createOrderError(ctx context.Context, err error) (public.CreateOrderRespons
 		), nil
 	}
 
+	if errors.Is(err, order.ErrCartEmpty) {
+		empty := problem(ctx, http.StatusUnprocessableEntity, "CART_EMPTY",
+			"Корзина пуста",
+			"Добавьте позиции в корзину перед оформлением")
+
+		return public.CreateOrder422ApplicationProblemPlusJSONResponse{
+			Type:     empty.Type,
+			Title:    empty.Title,
+			Status:   empty.Status,
+			Code:     empty.Code,
+			Detail:   empty.Detail,
+			Instance: empty.Instance,
+			Issues:   []public.CartIssue{},
+		}, nil
+	}
+
 	var validation order.ValidationError
 	if errors.As(err, &validation) {
 		problem := problem(ctx, http.StatusUnprocessableEntity, "CART_NOT_VALID",
