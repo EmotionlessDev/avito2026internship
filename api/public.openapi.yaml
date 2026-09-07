@@ -293,6 +293,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OrderList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [orders]
@@ -1029,6 +1030,10 @@ components:
         total_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
         delivery_address: { type: string }
         contact_phone: { type: string }
+        comment:
+          type: string
+          description: Комментарий, который пользователь оставил при оформлении
+          example: Позвонить за 10 минут
         eta_minutes:
           type: integer
           nullable: true

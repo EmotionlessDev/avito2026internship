@@ -667,6 +667,7 @@ erDiagram
         double delivery_lat
         double delivery_lon
         text contact_phone
+        text comment "«позвонить за 10 минут»"
         int eta_minutes
         text idempotency_key "UK вместе с user_id"
         text workflow_id "связь с Temporal"

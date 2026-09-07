@@ -15,23 +15,35 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
 	"github.com/emotionlessdev/avito-kitchen/internal/gen/public"
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
+	"github.com/emotionlessdev/avito-kitchen/internal/order"
 	"github.com/emotionlessdev/avito-kitchen/internal/paging"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
 )
 
 // Handler реализует public.StrictServerInterface.
 //
-// Сервис заказов добавится сюда полем на этапах 6–7; пока его ручки
-// отвечают 501 — см. notImplemented.
+// Отмена заказа и SSE-поток статусов остаются заглушками до этапа 7:
+// это сигналы workflow, а не запись в таблицу — см. notImplemented.
 type Handler struct {
 	catalog *catalog.Service
 	search  *search.Service
 	cart    *cart.Service
+	orders  *order.Service
 }
 
 // New собирает хендлер клиентского контура.
-func New(catalogService *catalog.Service, searchService *search.Service, cartService *cart.Service) *Handler {
-	return &Handler{catalog: catalogService, search: searchService, cart: cartService}
+func New(
+	catalogService *catalog.Service,
+	searchService *search.Service,
+	cartService *cart.Service,
+	orderService *order.Service,
+) *Handler {
+	return &Handler{
+		catalog: catalogService,
+		search:  searchService,
+		cart:    cartService,
+		orders:  orderService,
+	}
 }
 
 // defaultLimit повторяет default из спеки: oapi-codegen значения по умолчанию

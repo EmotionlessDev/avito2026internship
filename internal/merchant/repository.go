@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/emotionlessdev/avito-kitchen/internal/events"
+	"github.com/emotionlessdev/avito-kitchen/internal/outbox"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -320,15 +323,14 @@ func (r *Repository) ApplyImport(
 			return err
 		}
 
-		// Пустой план — только запись в аудит. Витрину не трогаем: иначе
-		// каждый повторный импорт переписывал бы все строки поиска ради
-		// одинакового результата. Расхождения витрины с меню чинит
-		// не импорт, а суточная сверка (docs/DESIGN.md §6.4).
+		// Пустой план — только запись в аудит. Событий тоже не шлём: иначе
+		// каждый повторный импорт гнал бы в топик снимки, ничем не
+		// отличающиеся от предыдущих.
 		if changes.IsEmpty() {
 			return nil
 		}
 
-		return refreshSearchItems(ctx, tx, venueID)
+		return emitCatalogEvents(ctx, tx, venueID, changedItemIDs(changes))
 	})
 }
 
@@ -489,6 +491,10 @@ func (r *Repository) SetAvailability(
 		result = AvailabilityResult{}
 		scheduled = nil
 
+		// Позиции, чей снимок изменился: сами снятые позиции и те, у кого
+		// переключилась опция — их цена и состав опций тоже едут в витрину.
+		var touched []uuid.UUID
+
 		for _, change := range request.Items {
 			id, found, updateErr := setItemAvailability(ctx, tx, venueID, change)
 			if updateErr != nil {
@@ -502,6 +508,7 @@ func (r *Repository) SetAvailability(
 			}
 
 			result.ItemsUpdated++
+			touched = append(touched, id)
 			scheduled = appendScheduled(scheduled, StopTarget{Kind: StopTargetItem, ID: id}, change)
 		}
 
@@ -518,16 +525,40 @@ func (r *Repository) SetAvailability(
 			}
 
 			result.OptionsUpdated++
+
+			itemID, itemErr := itemOfOption(ctx, tx, id)
+			if itemErr != nil {
+				return itemErr
+			}
+
+			touched = append(touched, itemID)
 			scheduled = appendScheduled(scheduled, StopTarget{Kind: StopTargetOption, ID: id}, change)
 		}
 
-		return refreshSearchItems(ctx, tx, venueID)
+		return emitCatalogEvents(ctx, tx, venueID, touched)
 	})
 	if err != nil {
 		return AvailabilityResult{}, nil, err
 	}
 
 	return result, scheduled, nil
+}
+
+// itemOfOption находит позицию, которой принадлежит модификатор: снимок
+// каталога описывает позицию целиком, поэтому событие шлётся про неё.
+func itemOfOption(ctx context.Context, tx pgx.Tx, optionID uuid.UUID) (uuid.UUID, error) {
+	var itemID uuid.UUID
+
+	err := tx.QueryRow(ctx, `
+		SELECT g.item_id
+		FROM menu_options o
+		JOIN menu_option_groups g ON g.id = o.group_id
+		WHERE o.id = $1`, optionID).Scan(&itemID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("позиция модификатора: %w", err)
+	}
+
+	return itemID, nil
 }
 
 // ScheduledReturn — цель, для которой заведение попросило авто-возврат.
@@ -625,9 +656,14 @@ func (r *Repository) UpdateVenue(ctx context.Context, settings VenueSettings) er
 			}
 		}
 
-		// Пауза приёма и название заведения попадают в витрину поиска —
-		// её нужно освежить вместе с настройками.
-		return refreshSearchItems(ctx, tx, venueID)
+		// Пауза приёма и часовой пояс попадают в снимок каталога, поэтому
+		// после смены настроек переиздаём снимки всех позиций заведения.
+		itemIDs, itemsErr := venueItemIDs(ctx, tx, venueID)
+		if itemsErr != nil {
+			return itemsErr
+		}
+
+		return emitCatalogEvents(ctx, tx, venueID, itemIDs)
 	})
 }
 
@@ -740,54 +776,131 @@ func (r *Repository) VenueSettingsSnapshot(ctx context.Context) (VenueSettings, 
 	return settings, nil
 }
 
-// refreshSearchItems перестраивает витрину поиска для заведения.
+// changedItemIDs — позиции, состояние которых изменил импорт: и обновлённые,
+// и заархивированные. Именно про них нужно рассказать наблюдателям.
+func changedItemIDs(changes Changes) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(changes.Items)+len(changes.ArchiveIDs))
+
+	for i := range changes.Items {
+		ids = append(ids, changes.Items[i].ID)
+	}
+
+	ids = append(ids, changes.ArchiveIDs...)
+
+	return ids
+}
+
+// emitCatalogEvents кладёт в outbox снимок каждой затронутой позиции.
 //
-// На этапе 3 витрина наполнялась только сидом, и любое изменение меню
-// разъезжалось с выдачей поиска. Пока индексатор не появился (этап 6),
-// витрина обновляется синхронно и в той же транзакции — иначе поиск покажет
-// снятое блюдо, а каталог уже нет.
-func refreshSearchItems(ctx context.Context, tx pgx.Tx, venueID uuid.UUID) error {
-	_, err := tx.Exec(ctx, `
-		INSERT INTO search_items (item_id, venue_id, item_name, description, venue_name,
-		                          category_name, price_minor, is_available, venue_is_active,
-		                          venue_is_accepting, lat, lon, updated_at)
+// До этапа 6 витрина поиска обновлялась прямо здесь, в той же транзакции.
+// Теперь запись в неё одна — консьюмер search-indexer, а меню и событие
+// становятся видимыми вместе благодаря outbox. Двойной записи в одну
+// проекцию из двух мест больше нет (docs/DESIGN.md §5).
+//
+// Событие — полный снимок позиции: топик каталога компактируемый, и после
+// компакции по ключу остаётся только последнее сообщение.
+func emitCatalogEvents(ctx context.Context, tx pgx.Tx, venueID uuid.UUID, itemIDs []uuid.UUID) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+
+	snapshots, err := catalogSnapshots(ctx, tx, venueID, itemIDs)
+	if err != nil {
+		return err
+	}
+
+	batch := make([]outbox.Event, 0, len(snapshots))
+
+	for i := range snapshots {
+		eventType := events.TypeMenuItemChanged
+		if snapshots[i].IsArchived {
+			eventType = events.TypeMenuItemArchived
+		}
+
+		batch = append(batch, outbox.Event{
+			AggregateType: events.AggregateMenuItem,
+			AggregateID:   snapshots[i].ItemID,
+			Type:          eventType,
+			Payload:       snapshots[i],
+		})
+	}
+
+	return outbox.WriteAll(ctx, tx, batch)
+}
+
+// catalogSnapshots собирает состояние позиций после изменений.
+//
+// Архивные позиции читаются тоже: индексатору нужно узнать, что их больше
+// нет в меню, а узнать это можно только из события.
+func catalogSnapshots(
+	ctx context.Context, tx pgx.Tx, venueID uuid.UUID, itemIDs []uuid.UUID,
+) ([]events.MenuItemSnapshot, error) {
+	rows, err := tx.Query(ctx, `
 		SELECT i.id, i.venue_id, i.name, i.description, v.name, c.name, i.price_minor,
-		       i.is_available, v.status = 'active', v.is_accepting_orders, v.lat, v.lon, now()
+		       i.is_available, i.is_archived, v.status = 'active', v.is_accepting_orders,
+		       v.lat, v.lon
 		FROM menu_items i
 		JOIN venues v ON v.id = i.venue_id
 		JOIN menu_categories c ON c.id = i.category_id
-		WHERE i.venue_id = $1 AND NOT i.is_archived
-		ON CONFLICT (item_id) DO UPDATE SET
-			venue_id = EXCLUDED.venue_id,
-			item_name = EXCLUDED.item_name,
-			description = EXCLUDED.description,
-			venue_name = EXCLUDED.venue_name,
-			category_name = EXCLUDED.category_name,
-			price_minor = EXCLUDED.price_minor,
-			is_available = EXCLUDED.is_available,
-			venue_is_active = EXCLUDED.venue_is_active,
-			venue_is_accepting = EXCLUDED.venue_is_accepting,
-			lat = EXCLUDED.lat,
-			lon = EXCLUDED.lon,
-			updated_at = now()`, venueID)
+		WHERE i.venue_id = $1 AND i.id = ANY($2)`, venueID, itemIDs)
 	if err != nil {
-		return fmt.Errorf("обновление витрины поиска: %w", err)
+		return nil, fmt.Errorf("снимки позиций каталога: %w", err)
 	}
 
-	// Архивированное и удалённое из витрины убирается: иначе поиск продолжит
-	// показывать позицию, которой в меню больше нет.
-	_, err = tx.Exec(ctx, `
-		DELETE FROM search_items s
-		WHERE s.venue_id = $1
-		  AND NOT EXISTS (
-		      SELECT 1 FROM menu_items i
-		      WHERE i.id = s.item_id AND NOT i.is_archived
-		  )`, venueID)
-	if err != nil {
-		return fmt.Errorf("очистка витрины поиска: %w", err)
+	defer rows.Close()
+
+	var snapshots []events.MenuItemSnapshot
+
+	for rows.Next() {
+		var snapshot events.MenuItemSnapshot
+
+		if err := rows.Scan(
+			&snapshot.ItemID, &snapshot.VenueID, &snapshot.ItemName, &snapshot.Description,
+			&snapshot.VenueName, &snapshot.CategoryName, &snapshot.PriceMinor,
+			&snapshot.IsAvailable, &snapshot.IsArchived, &snapshot.VenueIsActive,
+			&snapshot.VenueIsAccepting, &snapshot.Lat, &snapshot.Lon,
+		); err != nil {
+			return nil, fmt.Errorf("чтение снимка позиции: %w", err)
+		}
+
+		snapshot.ChangedAt = time.Now().UTC()
+		snapshots = append(snapshots, snapshot)
 	}
 
-	return nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("чтение снимков позиций: %w", err)
+	}
+
+	return snapshots, nil
+}
+
+// venueItemIDs — все позиции заведения, включая архивные: настройки
+// заведения (пауза приёма, название) попадают в каждый снимок каталога.
+func venueItemIDs(ctx context.Context, tx pgx.Tx, venueID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `SELECT id FROM menu_items WHERE venue_id = $1`, venueID)
+	if err != nil {
+		return nil, fmt.Errorf("позиции заведения: %w", err)
+	}
+
+	defer rows.Close()
+
+	var ids []uuid.UUID
+
+	for rows.Next() {
+		var id uuid.UUID
+
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("чтение позиции заведения: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("чтение позиций заведения: %w", err)
+	}
+
+	return ids, nil
 }
 
 // inTx выполняет работу в транзакции: коммит при успехе, откат при ошибке
