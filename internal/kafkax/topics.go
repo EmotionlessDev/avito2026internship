@@ -30,4 +30,6 @@ const (
 	// путь идёт синхронно из HTTP-хендлера, а этот потребитель поднимает
 	// процесс, если тот вызов не удался.
 	GroupWorkflowStarter = "workflow-starter"
+	// GroupMerchantStats — витрина показателей заведения за день (M8).
+	GroupMerchantStats = "merchant-stats"
 )

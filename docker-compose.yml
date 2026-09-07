@@ -271,6 +271,30 @@ services:
       retries: 12
       start_period: 5s
 
+  # Раннер демо-прогона (scripts/demo.sh).
+  #
+  # Спрятан за профилем: `docker compose up` его не поднимает — это не сервис
+  # стенда, а разовая команда. Живёт в compose, а не в Makefile, потому что
+  # ему нужна та же сеть, что и стенду: тогда прогон не зависит от того,
+  # какие порты проброшены наружу.
+  demo:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: build/Dockerfile.demo
+    depends_on:
+      kitchen-api:
+        condition: service_healthy
+      merchant-pos:
+        condition: service_healthy
+    environment:
+      API_BASE: http://kitchen-api:8080
+      POS_BASE: http://merchant-pos:8090
+      VENUE_KEY: ${POS_API_KEY:-kitchen_demo_hachapuri_key}
+      ORDER_CONFIRMATION_TIMEOUT: ${ORDER_CONFIRMATION_TIMEOUT:-7m}
+    volumes:
+      - ./scripts:/app/scripts:ro
+
 volumes:
   pgdata:
   kafkadata:

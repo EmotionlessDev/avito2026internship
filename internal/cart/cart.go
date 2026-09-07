@@ -83,6 +83,22 @@ func (c Cart) ItemsAmountMinor() int64 {
 	return total
 }
 
+// MixedVenuesError — в корзину кладут блюдо не того заведения.
+//
+// Ошибка несёт название заведения, которое уже занимает корзину: клиенту
+// нужно спросить «очистить корзину «Хачапури и вино»?», а не абстрактное
+// «очистить корзину» — иначе пользователь не поймёт, что именно он теряет.
+type MixedVenuesError struct {
+	VenueName string
+}
+
+func (e MixedVenuesError) Error() string {
+	return ErrMixedVenues.Error() + ": " + e.VenueName
+}
+
+// Is связывает конкретную ошибку с доменным маркером.
+func (e MixedVenuesError) Is(target error) bool { return errors.Is(target, ErrMixedVenues) }
+
 // IsEmpty сообщает, что оформлять нечего.
 func (c Cart) IsEmpty() bool {
 	return len(c.Lines) == 0

@@ -37,22 +37,31 @@ func (r *Repository) ApplyStatus(ctx context.Context, transition Transition) (Or
 	var updated Order
 
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
-		current, number, userID, venueID, err := lockOrder(ctx, tx, transition.OrderID)
+		locked, err := lockOrder(ctx, tx, transition.OrderID)
 		if err != nil {
 			return err
 		}
 
-		if current == transition.To {
+		if locked.Status == transition.To {
 			// Уже в этом статусе: активность выполнилась повторно.
 			return nil
 		}
 
-		if err := CanTransition(current, transition.To, transition.Actor); err != nil {
+		if err := CanTransition(locked.Status, transition.To, transition.Actor); err != nil {
 			return err
 		}
 
-		if err := writeStatus(ctx, tx, transition, current); err != nil {
+		if err := writeStatus(ctx, tx, transition, locked.Status); err != nil {
 			return err
+		}
+
+		changedAt := time.Now().UTC()
+
+		// placed_at на самом переходе в placed ещё не записан в прочитанной
+		// строке, поэтому берём момент перехода: это и есть placed_at.
+		placedAt := locked.PlacedAt
+		if transition.To == StatusPlaced {
+			placedAt = &changedAt
 		}
 
 		return outbox.Write(ctx, tx, outbox.Event{
@@ -60,15 +69,18 @@ func (r *Repository) ApplyStatus(ctx context.Context, transition Transition) (Or
 			AggregateID:   transition.OrderID,
 			Type:          events.TypeOrderStatusChanged,
 			Payload: events.OrderStatusChanged{
-				OrderID:    transition.OrderID,
-				Number:     number,
-				UserID:     userID,
-				VenueID:    venueID,
-				FromStatus: string(current),
-				ToStatus:   string(transition.To),
-				ActorType:  string(transition.Actor),
-				Reason:     transition.Reason,
-				ChangedAt:  time.Now().UTC(),
+				OrderID:          transition.OrderID,
+				Number:           locked.Number,
+				UserID:           locked.UserID,
+				VenueID:          locked.VenueID,
+				FromStatus:       string(locked.Status),
+				ToStatus:         string(transition.To),
+				ActorType:        string(transition.Actor),
+				Reason:           transition.Reason,
+				ChangedAt:        changedAt,
+				TotalAmountMinor: locked.TotalAmountMinor,
+				OrderCreatedAt:   locked.CreatedAt,
+				PlacedAt:         placedAt,
 			},
 		})
 	})
@@ -84,25 +96,38 @@ func (r *Repository) ApplyStatus(ctx context.Context, transition Transition) (Or
 	return updated, nil
 }
 
+// lockedOrder — то, что нужно знать о заказе, чтобы применить переход
+// и собрать событие.
+type lockedOrder struct {
+	Status           Status
+	Number           string
+	UserID           uuid.UUID
+	VenueID          uuid.UUID
+	TotalAmountMinor int64
+	CreatedAt        time.Time
+	PlacedAt         *time.Time
+}
+
 // lockOrder читает заказ под блокировку строки: пока идёт проверка перехода,
 // соседний вызов не должен подменить статус.
-func lockOrder(
-	ctx context.Context, tx pgx.Tx, orderID uuid.UUID,
-) (status Status, number string, userID, venueID uuid.UUID, err error) {
-	err = tx.QueryRow(ctx, `
-		SELECT status, number, user_id, venue_id
+func lockOrder(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) (lockedOrder, error) {
+	var locked lockedOrder
+
+	err := tx.QueryRow(ctx, `
+		SELECT status, number, user_id, venue_id, total_amount_minor, created_at, placed_at
 		FROM orders WHERE id = $1 FOR UPDATE`, orderID).
-		Scan(&status, &number, &userID, &venueID)
+		Scan(&locked.Status, &locked.Number, &locked.UserID, &locked.VenueID,
+			&locked.TotalAmountMinor, &locked.CreatedAt, &locked.PlacedAt)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", uuid.Nil, uuid.Nil, ErrNotFound
+		return lockedOrder{}, ErrNotFound
 	}
 
 	if err != nil {
-		return "", "", uuid.Nil, uuid.Nil, fmt.Errorf("чтение заказа под блокировкой: %w", err)
+		return lockedOrder{}, fmt.Errorf("чтение заказа под блокировкой: %w", err)
 	}
 
-	return status, number, userID, venueID, nil
+	return locked, nil
 }
 
 func writeStatus(ctx context.Context, tx pgx.Tx, transition Transition, from Status) error {

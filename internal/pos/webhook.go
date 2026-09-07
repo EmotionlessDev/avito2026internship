@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -87,6 +88,17 @@ func (s *Service) DeliverOrderCancelled(
 
 	if !fresh {
 		return pos.DeliverOrderCancelled409Response{}, nil
+	}
+
+	// Заказа может не быть вовсе: вебхук создания до заведения не дошёл,
+	// а поллинг его уже не увидит — платформа успела снять заказ.
+	// Контракт обещает на этот случай 404, а не молчаливое согласие.
+	if _, err := s.storage.OrderByID(ctx, request.OrderId.String()); err != nil {
+		if errors.Is(err, ErrOrderNotFound) {
+			return pos.DeliverOrderCancelled404Response{}, nil
+		}
+
+		return nil, err
 	}
 
 	if err := s.storage.SetStatus(ctx, request.OrderId.String(), statusCancelled, time.Now().UTC()); err != nil {

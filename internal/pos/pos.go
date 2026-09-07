@@ -21,6 +21,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	merchant "github.com/emotionlessdev/avito-kitchen/internal/gen/merchant"
 )
 
 // Service — сервис заведения: хранилище, клиент платформы, состояние сценариев.
@@ -85,7 +87,7 @@ func (s *Service) onboard(ctx context.Context) {
 	const retryInterval = 3 * time.Second
 
 	for attempt := 1; ctx.Err() == nil; attempt++ {
-		if err := s.syncMenu(ctx); err != nil {
+		if _, err := s.syncMenu(ctx); err != nil {
 			s.log.WarnContext(ctx, "меню не загружено в платформу",
 				slog.Int("attempt", attempt), slog.String("error", err.Error()))
 		} else if err := s.platform.RegisterWebhook(ctx, s.cfg.WebhookURL, s.cfg.WebhookSecret); err != nil {
@@ -107,10 +109,10 @@ func (s *Service) onboard(ctx context.Context) {
 }
 
 // syncMenu отправляет платформе текущее меню заведения.
-func (s *Service) syncMenu(ctx context.Context) error {
+func (s *Service) syncMenu(ctx context.Context) (merchant.MenuImportResult, error) {
 	items, err := s.storage.Menu(ctx)
 	if err != nil {
-		return err
+		return merchant.MenuImportResult{}, err
 	}
 
 	return s.platform.ImportMenu(ctx, items, s.categories, s.optionGroups)
