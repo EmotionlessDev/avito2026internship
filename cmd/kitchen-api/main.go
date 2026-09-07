@@ -20,8 +20,10 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
 	"github.com/emotionlessdev/avito-kitchen/internal/merchant"
 	"github.com/emotionlessdev/avito-kitchen/internal/order"
+	orderworkflow "github.com/emotionlessdev/avito-kitchen/internal/order/workflow"
 	"github.com/emotionlessdev/avito-kitchen/internal/pg"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
+	"github.com/emotionlessdev/avito-kitchen/internal/temporalx"
 )
 
 func main() {
@@ -55,9 +57,19 @@ func run() error {
 
 	defer pool.Close()
 
+	// Temporal нужен API, чтобы запускать процесс заказа и слать ему сигналы.
+	// Состояние при этом читается из Postgres, поэтому недоступность движка
+	// не мешает выдаче каталога (главный ADR, docs/DESIGN.md §5).
+	temporal, err := temporalx.Connect(ctx, cfg.Temporal, log)
+	if err != nil {
+		return err
+	}
+
+	defer temporal.Close()
+
 	health := httpx.NewHealth()
 	health.Register("postgres", pg.HealthCheck(pool))
-	// Проверка Temporal регистрируется здесь на этапе 7.
+	health.Register("temporal", temporalx.HealthCheck(temporal, cfg.Temporal.Namespace))
 
 	router := httpx.NewRouter(log, health)
 
@@ -68,18 +80,21 @@ func run() error {
 	// Корзине нужен каталог: состояние заведения для каскада валидации
 	// берётся оттуда, где живут расписание и геометрия.
 	cartService := cart.NewService(cart.NewRepository(pool), catalogService)
-	orderService := order.NewService(order.NewRepository(pool), cartService, catalogService)
+	orderProcess := orderworkflow.NewProcess(temporal, cfg.Temporal.TaskQueue)
+	orderService := order.NewService(
+		order.NewRepository(pool), cartService, catalogService, orderProcess, log)
 
 	publicHandler := publicapi.New(catalogService, searchService, cartService, orderService)
 	if err := publicapi.Mount(router, publicHandler); err != nil {
 		return err
 	}
 
-	// Планировщик стоп-листа пока отказывает: durable-таймеры появятся
-	// вместе с Temporal на этапе 7, и тогда здесь поменяется одна строка.
+	// Шов из этапа 4 закрыт: место заглушки занял планировщик поверх
+	// Temporal, и поле until в стоп-листе заработало без правок в сервисе
+	// и хендлерах.
 	merchantService := merchant.NewService(
 		merchant.NewRepository(pool),
-		merchant.UnsupportedScheduler{},
+		orderworkflow.NewScheduler(temporal, cfg.Temporal.TaskQueue),
 	)
 
 	merchantHandler := merchantapi.New(merchantService, orderService)

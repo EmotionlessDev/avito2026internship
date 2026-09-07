@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/emotionlessdev/avito-kitchen/internal/cart"
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
@@ -34,16 +35,18 @@ type Venues interface {
 	GetVenue(ctx context.Context, id uuid.UUID, point *catalog.Point) (catalog.VenueView, error)
 }
 
-// Service — оформление и чтение заказов.
+// Service — оформление, чтение и продвижение заказов.
 type Service struct {
-	store  Store
-	carts  Carts
-	venues Venues
+	store   Store
+	carts   Carts
+	venues  Venues
+	process Process
+	log     *slog.Logger
 }
 
 // NewService собирает сервис заказов.
-func NewService(store Store, carts Carts, venues Venues) *Service {
-	return &Service{store: store, carts: carts, venues: venues}
+func NewService(store Store, carts Carts, venues Venues, process Process, log *slog.Logger) *Service {
+	return &Service{store: store, carts: carts, venues: venues, process: process, log: log}
 }
 
 // CreateRequest — запрос на оформление.
@@ -143,9 +146,111 @@ func (s *Service) Create(
 		if err := s.carts.Clear(ctx, userID); err != nil {
 			return Order{}, false, err
 		}
+
+		s.startProcess(ctx, created)
 	}
 
 	return created, isNew, nil
+}
+
+// startProcess запускает процесс заказа быстрым путём.
+//
+// Ошибка здесь не проваливает запрос: заказ уже создан, а факт о нём лежит
+// в outbox. Если синхронный запуск не удался, процесс поднимет страховочный
+// потребитель order-events — оба пути идемпотентны, потому что идентификатор
+// workflow выводится из заказа (docs/DESIGN.md §5).
+func (s *Service) startProcess(ctx context.Context, created Order) {
+	if err := s.process.Start(ctx, ProcessInput{
+		OrderID:          created.ID,
+		UserID:           created.UserID,
+		VenueID:          created.VenueID,
+		Number:           created.Number,
+		TotalAmountMinor: created.TotalAmountMinor,
+	}); err != nil {
+		s.log.WarnContext(ctx, "процесс заказа не запустился быстрым путём",
+			slog.String("order", created.Number),
+			slog.String("error", err.Error()))
+	}
+}
+
+// Cancel отменяет заказ по просьбе пользователя.
+//
+// Право на отмену проверяется машиной состояний до сигнала: заказ, который
+// уже готов, отменять поздно (сценарий U11), и узнать об этом пользователь
+// должен сразу, а не после похода в оркестратор.
+func (s *Service) Cancel(ctx context.Context, userID, orderID uuid.UUID, reason string) (Order, error) {
+	current, err := s.store.ByUser(ctx, userID, orderID)
+	if err != nil {
+		return Order{}, err
+	}
+
+	if !IsCancellable(current.Status) {
+		return Order{}, ErrNotCancellable{Status: current.Status}
+	}
+
+	if err := s.process.Cancel(ctx, orderID, reason); err != nil {
+		return Order{}, err
+	}
+
+	return current, nil
+}
+
+// Accept подтверждает заказ от имени заведения и называет время готовности.
+//
+// Хендлер не пишет статус сам: он шлёт сигнал, а статус проставляет активность
+// внутри workflow. Так orders.status остаётся проекцией состояния процесса,
+// а не вторым источником истины. То же верно для Reject, Ready и Deliver.
+func (s *Service) Accept(ctx context.Context, venueID, orderID uuid.UUID, etaMinutes int) (Order, error) {
+	return s.signal(ctx, venueID, orderID, StatusAccepted, func() error {
+		return s.process.VenueAccepted(ctx, orderID, etaMinutes)
+	})
+}
+
+// Reject отклоняет заказ.
+func (s *Service) Reject(ctx context.Context, venueID, orderID uuid.UUID, reason string) (Order, error) {
+	return s.signal(ctx, venueID, orderID, StatusRejected, func() error {
+		return s.process.VenueRejected(ctx, orderID, reason)
+	})
+}
+
+// Ready объявляет заказ готовым.
+func (s *Service) Ready(ctx context.Context, venueID, orderID uuid.UUID) (Order, error) {
+	return s.signal(ctx, venueID, orderID, StatusReady, func() error {
+		return s.process.Ready(ctx, orderID)
+	})
+}
+
+// Deliver подтверждает доставку.
+func (s *Service) Deliver(ctx context.Context, venueID, orderID uuid.UUID) (Order, error) {
+	return s.signal(ctx, venueID, orderID, StatusCompleted, func() error {
+		return s.process.Delivered(ctx, orderID)
+	})
+}
+
+// signal проверяет допустимость перехода и отправляет сигнал процессу.
+//
+// Проверка до сигнала нужна ради понятной ошибки: заведение должно получить
+// 409 с объяснением, а не «сигнал доставлен» и молчание в ответ.
+func (s *Service) signal(
+	ctx context.Context, venueID, orderID uuid.UUID, to Status, send func() error,
+) (Order, error) {
+	current, err := s.store.ByVenue(ctx, venueID, orderID)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// Готовность объявляется из cooking, а доставка завершается из delivering:
+	// промежуточные переходы делает сам процесс, поэтому проверяем тот шаг,
+	// который заведение действительно инициирует.
+	if err := CanTransition(current.Status, to, ActorVenue); err != nil {
+		return Order{}, err
+	}
+
+	if err := send(); err != nil {
+		return Order{}, err
+	}
+
+	return current, nil
 }
 
 // Get отдаёт заказ пользователя.

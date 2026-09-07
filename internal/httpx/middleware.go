@@ -173,6 +173,20 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return n, err //nolint:wrapcheck // прозрачная обёртка над ResponseWriter.
 }
 
-// Unwrap открывает доступ к нижележащему ResponseWriter для http.ResponseController
-// (streaming/SSE понадобится для потока статусов заказа).
+// Unwrap открывает доступ к нижележащему ResponseWriter для http.ResponseController.
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Flush проталкивает буфер клиенту.
+//
+// Без него SSE не работает: обёртка скрывает http.Flusher нижележащего
+// writer'а, приведение типа не проходит, и события копятся в буфере вместо
+// того, чтобы уходить сразу.
+func (r *statusRecorder) Flush() {
+	if !r.wrote {
+		r.WriteHeader(http.StatusOK)
+	}
+
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}

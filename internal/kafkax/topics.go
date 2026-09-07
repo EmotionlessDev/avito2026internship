@@ -26,4 +26,8 @@ const (
 const (
 	GroupSearchIndexer = "search-indexer"
 	GroupNotifier      = "notifier"
+	// GroupWorkflowStarter — страховка на запуск процесса заказа: быстрый
+	// путь идёт синхронно из HTTP-хендлера, а этот потребитель поднимает
+	// процесс, если тот вызов не удался.
+	GroupWorkflowStarter = "workflow-starter"
 )

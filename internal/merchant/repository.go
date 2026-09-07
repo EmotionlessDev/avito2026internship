@@ -623,6 +623,71 @@ func setOptionAvailability(
 	return id, true, nil
 }
 
+// ReturnToSale возвращает позицию или опцию в продажу от имени системы.
+//
+// venue_id передаётся явно, а не берётся из контекста: вызывающий — не
+// заведение, а durable-таймер платформы (StopListWorkflow), у которого
+// нет API-ключа. Правило изоляции при этом не нарушено — фильтр по заведению
+// всё равно стоит в запросе.
+func (r *Repository) ReturnToSale(ctx context.Context, venueID uuid.UUID, target StopTarget) error {
+	return r.inTx(ctx, func(tx pgx.Tx) error {
+		itemID, err := returnTarget(ctx, tx, venueID, target)
+		if err != nil {
+			return err
+		}
+
+		if itemID == uuid.Nil {
+			// Позиции больше нет: заведение успело удалить её из меню.
+			// Возвращать нечего, и это не ошибка.
+			return nil
+		}
+
+		return emitCatalogEvents(ctx, tx, venueID, []uuid.UUID{itemID})
+	})
+}
+
+func returnTarget(
+	ctx context.Context, tx pgx.Tx, venueID uuid.UUID, target StopTarget,
+) (uuid.UUID, error) {
+	if target.Kind == StopTargetItem {
+		var itemID uuid.UUID
+
+		err := tx.QueryRow(ctx, `
+			UPDATE menu_items SET is_available = true, updated_at = now()
+			WHERE id = $1 AND venue_id = $2 AND NOT is_archived
+			RETURNING id`, target.ID, venueID).Scan(&itemID)
+
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, nil
+		}
+
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("возврат позиции в продажу: %w", err)
+		}
+
+		return itemID, nil
+	}
+
+	var itemID uuid.UUID
+
+	err := tx.QueryRow(ctx, `
+		UPDATE menu_options o SET is_available = true, updated_at = now()
+		FROM menu_option_groups g
+		JOIN menu_items i ON i.id = g.item_id
+		WHERE o.group_id = g.id AND o.id = $1 AND i.venue_id = $2
+		RETURNING i.id`, target.ID, venueID).Scan(&itemID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, nil
+	}
+
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("возврат опции в продажу: %w", err)
+	}
+
+	return itemID, nil
+}
+
 // UpdateVenue применяет настройки заведения. Переданные поля заменяют текущие,
 // непереданные остаются как были — PUT с одним полем не должен обнулять
 // остальные.
