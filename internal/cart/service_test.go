@@ -261,3 +261,27 @@ func TestClear(t *testing.T) {
 	require.NoError(t, newService(store).Clear(t.Context(), userID))
 	assert.True(t, store.cleared)
 }
+
+// Заведение сняли с публикации, пока корзина лежала. Ответ обязан объяснить
+// причину, а не выглядеть как пустая корзина: позиции никуда не делись.
+func TestValidateVenueGoneFromCatalog(t *testing.T) {
+	t.Parallel()
+
+	id := venueID
+	store := &fakeStore{cart: cart.Cart{
+		ID: uuid.New(), UserID: userID, VenueID: &id,
+		Lines: []cart.Line{{
+			MenuItemID: itemID(1), Name: "Хачапури по-аджарски", Qty: 2,
+			AddedUnitPriceMinor: 52000, UnitPriceMinor: 52000, IsAvailable: true,
+		}},
+	}}
+
+	service := cart.NewService(store, stubVenues{err: catalog.ErrVenueNotFound})
+
+	result, err := service.Validate(t.Context(), userID, nil)
+
+	require.NoError(t, err)
+	assert.False(t, result.IsValid)
+	assert.Equal(t, []string{cart.CodeVenueNotAccepting}, codes(result.Issues))
+	assert.Equal(t, int64(104000), result.ItemsAmountMinor, "суммы остаются настоящими")
+}

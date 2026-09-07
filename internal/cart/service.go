@@ -2,6 +2,7 @@ package cart
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/emotionlessdev/avito-kitchen/internal/catalog"
@@ -137,6 +138,14 @@ func (s *Service) Validate(
 
 	view, err := s.venues.GetVenue(ctx, *current.VenueID, nil)
 	if err != nil {
+		if errors.Is(err, catalog.ErrVenueNotFound) {
+			// Заведение сняли с публикации, пока корзина лежала. Позиции
+			// в корзине остаются, поэтому суммы считаем как обычно, но
+			// заказать нельзя — и пользователь должен увидеть причину,
+			// а не пустой список проблем.
+			return unavailableVenueResult(current), nil
+		}
+
 		return Result{}, err
 	}
 
@@ -145,6 +154,22 @@ func (s *Service) Validate(
 		Cart:     current,
 		Delivery: delivery,
 	}), nil
+}
+
+// unavailableVenueResult — диагноз для корзины, чьё заведение больше
+// не обслуживает заказы.
+func unavailableVenueResult(current Cart) Result {
+	return Result{
+		IsValid:          false,
+		VenueID:          current.VenueID,
+		ItemsAmountMinor: current.ItemsAmountMinor(),
+		TotalAmountMinor: current.ItemsAmountMinor(),
+		Issues: []Issue{{
+			Code:     CodeVenueNotAccepting,
+			Severity: SeverityBlocking,
+			Message:  "Заведение больше не принимает заказы",
+		}},
+	}
 }
 
 func venueFrom(view catalog.VenueView) Venue {

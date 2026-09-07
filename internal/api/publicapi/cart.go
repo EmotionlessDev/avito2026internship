@@ -158,12 +158,6 @@ func (h *Handler) ValidateCart(
 
 	result, err := h.cart.Validate(ctx, userID, deliveryPoint(request.Body))
 	if err != nil {
-		if errors.Is(err, catalog.ErrVenueNotFound) {
-			// Заведение сняли с публикации, пока корзина лежала. Для клиента
-			// это не 404: корзина существует, просто заказать в ней нельзя.
-			return public.ValidateCart200JSONResponse{IsValid: false}, nil
-		}
-
 		return nil, err
 	}
 
