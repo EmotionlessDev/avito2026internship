@@ -78,7 +78,7 @@ func TestSearchRanksAvailableFirst(t *testing.T) {
 
 	service := search.NewService(index, openVenues{})
 
-	page, err := service.Search(t.Context(), search.Query{Text: "хачапури", Limit: 10})
+	page, err := service.Search(testContext(t), search.Query{Text: "хачапури", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Items, 5)
 
@@ -101,7 +101,7 @@ func TestSearchFallsBackToTrigramOnTypo(t *testing.T) {
 
 	service := search.NewService(index, openVenues{})
 
-	page, err := service.Search(t.Context(), search.Query{Text: "хачипури", Limit: 10})
+	page, err := service.Search(testContext(t), search.Query{Text: "хачипури", Limit: 10})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, index.trigramHits, "пустой полнотекст — повод добрать по опечатке")
@@ -120,7 +120,7 @@ func TestSearchMergesWithoutDuplicates(t *testing.T) {
 
 	service := search.NewService(index, openVenues{})
 
-	page, err := service.Search(t.Context(), search.Query{Text: "хачапури", Limit: 10})
+	page, err := service.Search(testContext(t), search.Query{Text: "хачапури", Limit: 10})
 	require.NoError(t, err)
 
 	require.Len(t, page.Items, 2, "позиция, найденная обоими способами, не задваивается")
@@ -139,7 +139,7 @@ func TestSearchOnlyAvailable(t *testing.T) {
 
 	service := search.NewService(index, openVenues{})
 
-	page, err := service.Search(t.Context(), search.Query{Text: "меню", OnlyAvailable: true, Limit: 10})
+	page, err := service.Search(testContext(t), search.Query{Text: "меню", OnlyAvailable: true, Limit: 10})
 	require.NoError(t, err)
 
 	for i := range page.Items {
@@ -165,7 +165,7 @@ func TestSearchClosedVenueSinksButStays(t *testing.T) {
 
 	service := search.NewService(index, openVenues{closed: map[uuid.UUID]bool{venueID(2): true}})
 
-	page, err := service.Search(t.Context(), search.Query{Text: "хачапури", Limit: 10})
+	page, err := service.Search(testContext(t), search.Query{Text: "хачапури", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Items, 5)
 
@@ -196,7 +196,7 @@ func TestSearchDistanceAffectsOrder(t *testing.T) {
 	service := search.NewService(index, openVenues{})
 	point := catalog.Point{Lat: 55.7402, Lon: 37.6280}
 
-	page, err := service.Search(t.Context(), search.Query{Text: "хачапури", Point: &point, Limit: 10})
+	page, err := service.Search(testContext(t), search.Query{Text: "хачапури", Point: &point, Limit: 10})
 	require.NoError(t, err)
 
 	assert.Equal(t, "Хачапури по-мегрельски", page.Items[0].ItemName,
@@ -218,12 +218,12 @@ func TestSearchPaginates(t *testing.T) {
 
 	service := search.NewService(index, openVenues{})
 
-	first, err := service.Search(t.Context(), search.Query{Text: "меню", Limit: 2})
+	first, err := service.Search(testContext(t), search.Query{Text: "меню", Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, first.Items, 2)
 	require.NotEmpty(t, first.NextCursor)
 
-	second, err := service.Search(t.Context(), search.Query{Text: "меню", Limit: 2, Cursor: first.NextCursor})
+	second, err := service.Search(testContext(t), search.Query{Text: "меню", Limit: 2, Cursor: first.NextCursor})
 	require.NoError(t, err)
 	require.Len(t, second.Items, 2)
 

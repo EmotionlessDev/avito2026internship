@@ -117,13 +117,13 @@ func TestEnsureUser(t *testing.T) {
 	t.Run("известный пользователь", func(t *testing.T) {
 		t.Parallel()
 
-		require.NoError(t, newService(&fakeStore{userKnown: true}).EnsureUser(t.Context(), userID))
+		require.NoError(t, newService(&fakeStore{userKnown: true}).EnsureUser(testContext(t), userID))
 	})
 
 	t.Run("неизвестный пользователь", func(t *testing.T) {
 		t.Parallel()
 
-		err := newService(&fakeStore{userKnown: false}).EnsureUser(t.Context(), userID)
+		err := newService(&fakeStore{userKnown: false}).EnsureUser(testContext(t), userID)
 		require.ErrorIs(t, err, cart.ErrUnknownUser)
 	})
 }
@@ -133,7 +133,7 @@ func TestAddItemCountsOptionsInPrice(t *testing.T) {
 
 	store := &fakeStore{items: map[uuid.UUID]cart.MenuItem{itemID(1): hachapuri()}}
 
-	_, err := newService(store).AddItem(t.Context(), userID, cart.AddRequest{
+	_, err := newService(store).AddItem(testContext(t), userID, cart.AddRequest{
 		ItemID:    itemID(1),
 		Qty:       2,
 		OptionIDs: []uuid.UUID{optionID(2)},
@@ -162,7 +162,7 @@ func TestAddItemRejectsBadOptions(t *testing.T) {
 
 			store := &fakeStore{items: map[uuid.UUID]cart.MenuItem{itemID(1): item}}
 
-			_, err := newService(store).AddItem(t.Context(), userID, cart.AddRequest{
+			_, err := newService(store).AddItem(testContext(t), userID, cart.AddRequest{
 				ItemID: itemID(1), Qty: 1, OptionIDs: options,
 			})
 
@@ -181,7 +181,7 @@ func TestAddItemRejectsUnavailable(t *testing.T) {
 
 	store := &fakeStore{items: map[uuid.UUID]cart.MenuItem{itemID(1): item}}
 
-	_, err := newService(store).AddItem(t.Context(), userID, cart.AddRequest{ItemID: itemID(1), Qty: 1})
+	_, err := newService(store).AddItem(testContext(t), userID, cart.AddRequest{ItemID: itemID(1), Qty: 1})
 
 	require.ErrorIs(t, err, cart.ErrMenuItemNotFound)
 	assert.Zero(t, store.addedQty)
@@ -192,7 +192,7 @@ func TestAddItemUnknownItem(t *testing.T) {
 
 	store := &fakeStore{items: map[uuid.UUID]cart.MenuItem{}}
 
-	_, err := newService(store).AddItem(t.Context(), userID, cart.AddRequest{ItemID: itemID(9), Qty: 1})
+	_, err := newService(store).AddItem(testContext(t), userID, cart.AddRequest{ItemID: itemID(9), Qty: 1})
 
 	require.ErrorIs(t, err, cart.ErrMenuItemNotFound)
 }
@@ -210,7 +210,7 @@ func TestAddItemFromAnotherVenue(t *testing.T) {
 		addErr: cart.ErrMixedVenues,
 	}
 
-	_, err := newService(store).AddItem(t.Context(), userID, cart.AddRequest{ItemID: itemID(1), Qty: 1})
+	_, err := newService(store).AddItem(testContext(t), userID, cart.AddRequest{ItemID: itemID(1), Qty: 1})
 
 	require.ErrorIs(t, err, cart.ErrMixedVenues)
 }
@@ -221,7 +221,7 @@ func TestValidateEmptyCartSkipsVenueLookup(t *testing.T) {
 	// Каталог намеренно сломан: пустая корзина не должна его дёргать.
 	service := cart.NewService(&fakeStore{}, stubVenues{err: catalog.ErrVenueNotFound})
 
-	result, err := service.Validate(t.Context(), userID, nil)
+	result, err := service.Validate(testContext(t), userID, nil)
 
 	require.NoError(t, err)
 	assert.False(t, result.IsValid)
@@ -247,7 +247,7 @@ func TestValidateUsesVenueState(t *testing.T) {
 		IsOpenNow: true,
 	}})
 
-	result, err := service.Validate(t.Context(), userID, nil)
+	result, err := service.Validate(testContext(t), userID, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{cart.CodeVenueNotAccepting}, codes(result.Issues),
@@ -258,7 +258,7 @@ func TestClear(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeStore{}
-	require.NoError(t, newService(store).Clear(t.Context(), userID))
+	require.NoError(t, newService(store).Clear(testContext(t), userID))
 	assert.True(t, store.cleared)
 }
 
@@ -278,7 +278,7 @@ func TestValidateVenueGoneFromCatalog(t *testing.T) {
 
 	service := cart.NewService(store, stubVenues{err: catalog.ErrVenueNotFound})
 
-	result, err := service.Validate(t.Context(), userID, nil)
+	result, err := service.Validate(testContext(t), userID, nil)
 
 	require.NoError(t, err)
 	assert.False(t, result.IsValid)

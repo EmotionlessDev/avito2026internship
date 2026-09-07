@@ -20,7 +20,7 @@ func TestTenantFrom(t *testing.T) {
 
 		venueID := uuid.MustParse("01890000-0001-7000-8000-000000000001")
 
-		got, err := merchant.TenantFrom(merchant.WithTenant(t.Context(), venueID))
+		got, err := merchant.TenantFrom(merchant.WithTenant(testContext(t), venueID))
 		require.NoError(t, err)
 		assert.Equal(t, venueID, got)
 	})
@@ -28,7 +28,7 @@ func TestTenantFrom(t *testing.T) {
 	t.Run("контекст без заведения — ошибка, а не пустой фильтр", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := merchant.TenantFrom(t.Context())
+		_, err := merchant.TenantFrom(testContext(t))
 		require.ErrorIs(t, err, merchant.ErrNoTenant)
 	})
 }

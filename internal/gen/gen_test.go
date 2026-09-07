@@ -27,9 +27,9 @@ func TestGeneratedCodeMatchesSpecs(t *testing.T) {
 		embedded  func() (*openapi3.T, error)
 		operation string
 	}{
-		"public":       {"public.openapi.yaml", public.GetSpec, "validatecart"},
-		"merchant":     {"merchant.openapi.yaml", merchant.GetSpec, "importmenu"},
-		"pos-webhooks": {"pos-webhooks.openapi.yaml", pos.GetSpec, "deliverorder"},
+		"public":       {"public.openapi.yaml", public.GetSwagger, "validatecart"},
+		"merchant":     {"merchant.openapi.yaml", merchant.GetSwagger, "importmenu"},
+		"pos-webhooks": {"pos-webhooks.openapi.yaml", pos.GetSwagger, "deliverorder"},
 	}
 
 	for name, spec := range specs {
@@ -61,10 +61,10 @@ func TestGeneratedCodeMatchesSpecs(t *testing.T) {
 func TestOrderStatusEnumIsSharedBetweenContours(t *testing.T) {
 	t.Parallel()
 
-	publicSpec, err := public.GetSpec()
+	publicSpec, err := public.GetSwagger()
 	require.NoError(t, err)
 
-	merchantSpec, err := merchant.GetSpec()
+	merchantSpec, err := merchant.GetSwagger()
 	require.NoError(t, err)
 
 	assert.Equal(t,

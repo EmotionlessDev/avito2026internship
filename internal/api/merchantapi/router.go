@@ -98,7 +98,7 @@ func unauthorized(w http.ResponseWriter, r *http.Request, detail string) {
 // requestValidator проверяет запрос по спеке контура: обязательные поля
 // снапшота, границы eta_minutes, длину секрета вебхука.
 func requestValidator() (gen.MiddlewareFunc, error) {
-	spec, err := gen.GetSpec()
+	spec, err := gen.GetSwagger()
 	if err != nil {
 		return nil, fmt.Errorf("встроенная спека merchant: %w", err)
 	}

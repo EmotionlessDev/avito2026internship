@@ -18,7 +18,7 @@ import (
 func TestValidationResponseMatchesSpecExample(t *testing.T) {
 	t.Parallel()
 
-	spec, err := public.GetSpec()
+	spec, err := public.GetSwagger()
 	require.NoError(t, err)
 
 	schema, ok := spec.Components.Schemas["CartValidation"]

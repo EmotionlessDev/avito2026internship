@@ -59,7 +59,7 @@ func Mount(router chi.Router, handler *Handler) error {
 // в запрос страницы любого размера. Валидация живёт в middleware, а не
 // в каждом хендлере, потому что источник правил один — YAML.
 func requestValidator() (public.MiddlewareFunc, error) {
-	spec, err := public.GetSpec()
+	spec, err := public.GetSwagger()
 	if err != nil {
 		return nil, fmt.Errorf("встроенная спека public: %w", err)
 	}
