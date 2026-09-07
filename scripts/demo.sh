@@ -791,12 +791,72 @@ scenario_M7() {
 }
 
 scenario_M8() {
+    # Витрина проверяется приращением, а не абсолютными числами: сценарий
+    # обязан работать и в одиночном прогоне (make demo ARGS="M8"), где до него
+    # заказов не было вовсе. Заодно это более сильная проверка — она
+    # доказывает, что проекция реагирует, а не что в базе что-то лежит.
+    # Снимок «до» берётся, когда на кухне пусто: заказ соседнего сценария,
+    # доигрывающий свои последние секунды, попал бы в приращение и приписал
+    # витрине чужую выручку.
+    await_pos_idle || note 'на кухне остались заказы прошлого сценария'
+    sleep 3
+
     mer GET '/venue/stats'
     assert_status 200 'витрина статистики заведения'
-    assert_true '.orders_total >= 1' 'заказы за день посчитаны'
-    assert_true '.orders_completed >= 1' 'есть завершённые заказы'
-    assert_true '.revenue_minor > 0' 'выручка посчитана'
-    assert_true '.orders_rejected >= 1' 'отказы посчитаны'
+    assert_true '.date != null and .orders_total >= 0' 'витрина отдаёт день заведения'
+
+    local before after
+    before=$HTTP_BODY
+
+    # Завершённый заказ — приращение выручки.
+    cart_reset
+    cart_add "$HV_004" 3 >/dev/null
+
+    place_order "$(idem_key m8-done)"
+    assert_status 201 'заказ для витрины оформлен'
+
+    local order_id
+    order_id=$(order_id_from_body)
+
+    await_status "$order_id" 'completed' 180 || return 1
+
+    # Отклонённый заказ — приращение счётчика отказов.
+    await_pos_idle || note 'на кухне остались заказы прошлого сценария'
+
+    pos POST '/pos/scenario/reject-next'
+    assert_status 200 'заведение отклонит следующий заказ'
+
+    cart_reset
+    cart_add "$HV_004" 3 >/dev/null
+
+    place_order "$(idem_key m8-rejected)"
+    assert_status 201 'второй заказ для витрины оформлен'
+
+    order_id=$(order_id_from_body)
+
+    await_status "$order_id" 'rejected' 60 || return 1
+
+    # Проекция догоняет через Kafka, поэтому даём ей долететь.
+    sleep 3
+
+    mer GET '/venue/stats'
+    assert_status 200 'витрина после двух заказов'
+    after=$HTTP_BODY
+
+    printf '%s\n%s' "$before" "$after" | jq -s '
+        {
+            total:     (.[1].orders_total     - .[0].orders_total),
+            completed: (.[1].orders_completed - .[0].orders_completed),
+            rejected:  (.[1].orders_rejected  - .[0].orders_rejected),
+            revenue:   (.[1].revenue_minor    - .[0].revenue_minor)
+        }' > /tmp/demo-stats-delta.json
+
+    HTTP_BODY=$(cat /tmp/demo-stats-delta.json)
+
+    assert_json '.total' '2' 'приращение всех заказов'
+    assert_json '.completed' '1' 'приращение завершённых'
+    assert_json '.rejected' '1' 'приращение отказов'
+    assert_json '.revenue' '131900' 'приращение выручки равно сумме завершённого заказа'
 }
 
 # --- прогон ----------------------------------------------------------------
