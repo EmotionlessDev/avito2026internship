@@ -28,7 +28,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 
 // UserExists проверяет, что пользователь из заголовка известен платформе.
 //
-// В MVP авторизации нет, X-User-Id приходит как есть (docs/DESIGN.md §11),
+// В MVP авторизации нет, X-User-Id приходит как есть (README.md, раздел «Осознанные упрощения»),
 // поэтому единственная защита от опечатки и подстановки — существование
 // пользователя в базе.
 func (r *Repository) UserExists(ctx context.Context, userID uuid.UUID) (bool, error) {

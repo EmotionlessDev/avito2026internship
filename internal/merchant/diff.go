@@ -12,7 +12,7 @@ import (
 
 // CurrentMenu — снимок того, что о меню заведения знает платформа. Ключи —
 // артикулы заведения: именно по ним снапшот сводится с нашими данными
-// (docs/DESIGN.md §7.1).
+// (README.md, раздел «О проекте»).
 type CurrentMenu struct {
 	Categories map[string]CurrentCategory
 	Items      map[string]CurrentItem
@@ -131,7 +131,7 @@ type OptionChange struct {
 type IDGenerator func() uuid.UUID
 
 // NewID — идентификатор для новых записей: UUID v7, k-sortable, генерируется
-// приложением (docs/DESIGN.md §7).
+// приложением (docs/adr/0005-uuid-v7-in-app.md).
 func NewID() uuid.UUID {
 	id, err := uuid.NewV7()
 	if err != nil {

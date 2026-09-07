@@ -106,6 +106,10 @@ migrate-status: ## Показать состояние миграций
 seed: ## Наполнить базу демо-данными
 	docker compose run --rm --build migrator seed
 
+.PHONY: check-diagrams
+check-diagrams: ## Проверить, что все Mermaid-диаграммы рендерятся
+	./scripts/check-diagrams.sh
+
 .PHONY: demo
 demo: ## Прогнать бизнес-сценарии (22 шт.); ARGS="U7 M3" — подмножество
 	# Без --build намеренно: образ раннера собирается сам при первом запуске,
