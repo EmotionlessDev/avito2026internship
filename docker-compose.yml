@@ -248,6 +248,20 @@ services:
     environment:
       POS_LOG_LEVEL: ${LOG_LEVEL:-info}
       POS_PLATFORM_BASE_URL: http://kitchen-api:8080
+      # Ключ и секрет заведения. В жизни их выдаёт платформа при онбординге;
+      # в стенде ключ приезжает из сида, а секрет заведение придумывает само.
+      POS_API_KEY: ${POS_API_KEY:-kitchen_demo_hachapuri_key}
+      POS_WEBHOOK_URL: http://merchant-pos:8090/pos/webhooks/orders
+      POS_WEBHOOK_SECRET: ${POS_WEBHOOK_SECRET:-pos-demo-secret-0123456789}
+      POS_DATABASE_PATH: /data/pos.db
+      # Автопилот ведёт заказ сам: демо не должно требовать человека,
+      # нажимающего кнопки на кухне.
+      POS_AUTOPILOT: ${POS_AUTOPILOT:-true}
+      POS_ACCEPT_DELAY: ${POS_ACCEPT_DELAY:-3s}
+      POS_PREP_TIME: ${POS_PREP_TIME:-10s}
+      POS_DELIVERY_TIME: ${POS_DELIVERY_TIME:-10s}
+    volumes:
+      - posdata:/data
     ports:
       - "${MERCHANT_POS_PORT:-8090}:8090"
     healthcheck:
@@ -260,3 +274,5 @@ services:
 volumes:
   pgdata:
   kafkadata:
+  # Своё хранилище заведения: заказы POS живут у него, а не в базе платформы.
+  posdata:

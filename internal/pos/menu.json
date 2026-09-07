@@ -1,0 +1,176 @@
+{
+  "items": [
+    {
+      "external_id": "hv-001",
+      "category": "cat-hachapuri",
+      "name": "Хачапури по-аджарски",
+      "description": "Лодочка из теста с сулугуни, яйцом и сливочным маслом",
+      "price_minor": 52000,
+      "position": 1,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-002",
+      "category": "cat-hachapuri",
+      "name": "Хачапури по-имеретински",
+      "description": "Закрытая лепёшка с имеретинским сыром",
+      "price_minor": 45000,
+      "position": 2,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-003",
+      "category": "cat-hachapuri",
+      "name": "Хачапури по-мегрельски",
+      "description": "С сыром внутри и румяной сырной корочкой сверху",
+      "price_minor": 49000,
+      "position": 3,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-004",
+      "category": "cat-hinkali",
+      "name": "Хинкали с бараниной",
+      "description": "Пять штук, ручная лепка, много бульона",
+      "price_minor": 39000,
+      "position": 1,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-005",
+      "category": "cat-hinkali",
+      "name": "Хинкали с говядиной и свининой",
+      "description": "Классические калакури, пять штук",
+      "price_minor": 36000,
+      "position": 2,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-006",
+      "category": "cat-hinkali",
+      "name": "Хинкали с сыром",
+      "description": "С сулугуни и мятой, пять штук",
+      "price_minor": 34000,
+      "position": 3,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-007",
+      "category": "cat-drinks",
+      "name": "Лимонад «Тархун»",
+      "description": "Домашний, на грузинском эстрагоне, 0.5 л",
+      "price_minor": 19000,
+      "position": 1,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-008",
+      "category": "cat-drinks",
+      "name": "Киндзмараули, бокал",
+      "description": "Красное полусладкое, Кахетия, 150 мл",
+      "price_minor": 45000,
+      "position": 2,
+      "is_available": true
+    },
+    {
+      "external_id": "hv-009",
+      "category": "cat-drinks",
+      "name": "Чай с чабрецом",
+      "description": "Чайник 700 мл",
+      "price_minor": 15000,
+      "position": 3,
+      "is_available": true
+    }
+  ],
+  "categories": [
+    {
+      "external_id": "cat-hachapuri",
+      "name": "Хачапури",
+      "position": 1
+    },
+    {
+      "external_id": "cat-hinkali",
+      "name": "Хинкали",
+      "position": 2
+    },
+    {
+      "external_id": "cat-drinks",
+      "name": "Напитки",
+      "position": 3
+    }
+  ],
+  "option_groups": [
+    {
+      "item_external_id": "hv-001",
+      "external_id": "hv-001-size",
+      "name": "Размер",
+      "min_choices": 1,
+      "max_choices": 1,
+      "position": 1,
+      "options": [
+        {
+          "external_id": "hv-001-size-m",
+          "name": "Обычная",
+          "price_delta_minor": 0,
+          "position": 1
+        },
+        {
+          "external_id": "hv-001-size-l",
+          "name": "Большая",
+          "price_delta_minor": 15000,
+          "position": 2
+        }
+      ]
+    },
+    {
+      "item_external_id": "hv-001",
+      "external_id": "hv-001-extra",
+      "name": "Добавки",
+      "min_choices": 0,
+      "max_choices": 3,
+      "position": 2,
+      "options": [
+        {
+          "external_id": "hv-001-extra-cheese",
+          "name": "Двойной сыр",
+          "price_delta_minor": 9000,
+          "position": 1
+        },
+        {
+          "external_id": "hv-001-extra-egg",
+          "name": "Дополнительное яйцо",
+          "price_delta_minor": 5000,
+          "position": 2
+        },
+        {
+          "external_id": "hv-001-extra-butter",
+          "name": "Больше масла",
+          "price_delta_minor": 3000,
+          "position": 3
+        }
+      ]
+    },
+    {
+      "item_external_id": "hv-004",
+      "external_id": "hv-004-sauce",
+      "name": "Соус",
+      "min_choices": 0,
+      "max_choices": 2,
+      "position": 1,
+      "options": [
+        {
+          "external_id": "hv-004-sauce-tkemali",
+          "name": "Ткемали",
+          "price_delta_minor": 4000,
+          "position": 1
+        },
+        {
+          "external_id": "hv-004-sauce-satsebeli",
+          "name": "Сацебели",
+          "price_delta_minor": 4000,
+          "position": 2
+        }
+      ]
+    }
+  ]
+}
