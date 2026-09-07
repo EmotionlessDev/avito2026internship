@@ -66,8 +66,14 @@ func (r *Repository) ByIdempotencyKey(
 	return found, true, nil
 }
 
-func (r *Repository) byID(ctx context.Context, orderID uuid.UUID) (Order, error) {
+// ByID отдаёт заказ без проверки владельца. Доступен только внутренним
+// потребителям — активностям workflow, которые уже работают от имени системы.
+func (r *Repository) ByID(ctx context.Context, orderID uuid.UUID) (Order, error) {
 	return r.one(ctx, `o.id = $1`, orderID)
+}
+
+func (r *Repository) byID(ctx context.Context, orderID uuid.UUID) (Order, error) {
+	return r.ByID(ctx, orderID)
 }
 
 func (r *Repository) one(ctx context.Context, where string, args ...any) (Order, error) {

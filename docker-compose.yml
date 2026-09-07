@@ -26,6 +26,10 @@ x-app-env: &app-env
   # Внутри сети compose брокер доступен по внутреннему listener'у; внешний
   # (localhost:9094) существует только для консольных утилит с хоста.
   KAFKA_BROKERS: kafka:9092
+  TEMPORAL_HOSTPORT: temporal:7233
+  # Срок подтверждения заказа заведением. По умолчанию боевые семь минут;
+  # демо-прогон переопределяет его секундами через .env.
+  ORDER_CONFIRMATION_TIMEOUT: ${ORDER_CONFIRMATION_TIMEOUT:-7m}
 
 services:
   postgres:
@@ -192,6 +196,8 @@ services:
         condition: service_healthy
       migrator:
         condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
     environment: *app-env
     ports:
       - "${KITCHEN_API_PORT:-8080}:8080"

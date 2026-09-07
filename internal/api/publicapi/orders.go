@@ -2,7 +2,10 @@ package publicapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/emotionlessdev/avito-kitchen/internal/gen/public"
@@ -208,4 +211,107 @@ func deref[T any](ptr *T) T {
 	}
 
 	return *ptr
+}
+
+// CancelOrder — отмена заказа пользователем.
+func (h *Handler) CancelOrder(
+	ctx context.Context, request public.CancelOrderRequestObject,
+) (public.CancelOrderResponseObject, error) {
+	userID, err := h.requireUser(ctx)
+	if err != nil {
+		return public.CancelOrder401ApplicationProblemPlusJSONResponse{
+			UnauthorizedApplicationProblemPlusJSONResponse: unauthorized(ctx, err),
+		}, nil
+	}
+
+	reason := ""
+	if request.Body != nil && request.Body.Reason != nil {
+		reason = *request.Body.Reason
+	}
+
+	cancelled, err := h.orders.Cancel(ctx, userID, request.OrderId, reason)
+	if err != nil {
+		return cancelOrderError(ctx, err)
+	}
+
+	// Статус проставит активность workflow: хендлер только отправил сигнал,
+	// поэтому в ответе заказ ещё может быть в прежнем статусе. Живой статус
+	// клиент видит через SSE или повторным GET.
+	return public.CancelOrder200JSONResponse(orderResponse(cancelled)), nil
+}
+
+// StreamOrderEvents — живой поток статусов заказа.
+func (h *Handler) StreamOrderEvents(
+	ctx context.Context, request public.StreamOrderEventsRequestObject,
+) (public.StreamOrderEventsResponseObject, error) {
+	userID, err := h.requireUser(ctx)
+	if err != nil {
+		return public.StreamOrderEvents401ApplicationProblemPlusJSONResponse{
+			UnauthorizedApplicationProblemPlusJSONResponse: unauthorized(ctx, err),
+		}, nil
+	}
+
+	events, err := h.orders.Stream(ctx, userID, request.OrderId, order.DefaultStreamOptions())
+	if err != nil {
+		if errors.Is(err, order.ErrNotFound) {
+			return public.StreamOrderEvents404ApplicationProblemPlusJSONResponse{
+				NotFoundApplicationProblemPlusJSONResponse: orderNotFound(ctx),
+			}, nil
+		}
+
+		return nil, err
+	}
+
+	return public.StreamOrderEvents200TexteventStreamResponse{
+		Body: sseReader(ctx, events),
+	}, nil
+}
+
+// sseReader превращает канал переходов в тело SSE-ответа.
+//
+// io.Pipe, а не буфер: события появляются по ходу жизни заказа, и ответ
+// обязан уходить клиенту по мере их появления, а не целиком в конце.
+func sseReader(ctx context.Context, events <-chan order.StatusChange) io.Reader {
+	reader, writer := io.Pipe()
+
+	go func() {
+		defer func() { _ = writer.Close() }()
+
+		for event := range events {
+			payload, err := json.Marshal(statusEvent(event))
+			if err != nil {
+				return
+			}
+
+			if _, err := fmt.Fprintf(writer, "event: status\ndata: %s\n\n", payload); err != nil {
+				return
+			}
+
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}()
+
+	return reader
+}
+
+func cancelOrderError(ctx context.Context, err error) (public.CancelOrderResponseObject, error) {
+	var notCancellable order.ErrNotCancellable
+	if errors.As(err, &notCancellable) {
+		return public.CancelOrder409ApplicationProblemPlusJSONResponse(
+			problem(ctx, http.StatusConflict, "ORDER_NOT_CANCELLABLE",
+				"Заказ уже нельзя отменить",
+				"Заказ в статусе "+string(notCancellable.Status)+
+					" — заведение уже приготовило блюда"),
+		), nil
+	}
+
+	if errors.Is(err, order.ErrNotFound) {
+		return public.CancelOrder404ApplicationProblemPlusJSONResponse{
+			NotFoundApplicationProblemPlusJSONResponse: orderNotFound(ctx),
+		}, nil
+	}
+
+	return nil, err
 }

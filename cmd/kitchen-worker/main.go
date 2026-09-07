@@ -18,11 +18,17 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/httpx"
 	"github.com/emotionlessdev/avito-kitchen/internal/kafkax"
 	"github.com/emotionlessdev/avito-kitchen/internal/logger"
+	"github.com/emotionlessdev/avito-kitchen/internal/merchant"
 	"github.com/emotionlessdev/avito-kitchen/internal/notify"
+	"github.com/emotionlessdev/avito-kitchen/internal/order"
+	orderworkflow "github.com/emotionlessdev/avito-kitchen/internal/order/workflow"
 	"github.com/emotionlessdev/avito-kitchen/internal/outbox"
+	"github.com/emotionlessdev/avito-kitchen/internal/payments"
 	"github.com/emotionlessdev/avito-kitchen/internal/pg"
 	"github.com/emotionlessdev/avito-kitchen/internal/search"
+	"github.com/emotionlessdev/avito-kitchen/internal/temporalx"
 
+	"go.temporal.io/sdk/worker"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -51,9 +57,16 @@ func run() error {
 
 	defer pool.Close()
 
+	temporal, err := temporalx.Connect(ctx, cfg.Temporal, log)
+	if err != nil {
+		return err
+	}
+
+	defer temporal.Close()
+
 	health := httpx.NewHealth()
 	health.Register("postgres", pg.HealthCheck(pool))
-	// Проверка Temporal регистрируется здесь на этапе 7.
+	health.Register("temporal", temporalx.HealthCheck(temporal, cfg.Temporal.Namespace))
 
 	router := httpx.NewRouter(log, health)
 
@@ -111,6 +124,48 @@ func run() error {
 	}
 
 	g.Go(func() error { return notifier.Run(ctx) })
+
+	// Temporal-worker: процессы заказов и стоп-листов. Активности держат
+	// подключение к базе и платёжному провайдеру — сам workflow к ним
+	// не ходит, ему нельзя.
+	orderRepo := order.NewRepository(pool)
+	process := orderworkflow.NewProcess(temporal, cfg.Temporal.TaskQueue, orderworkflow.Timings{
+		Confirmation: cfg.Temporal.ConfirmationTimeout,
+		CookingSLA:   cfg.Temporal.CookingSLA,
+		DeliverySLA:  cfg.Temporal.DeliverySLA,
+	})
+
+	temporalWorker := worker.New(temporal, cfg.Temporal.TaskQueue, worker.Options{})
+	temporalWorker.RegisterWorkflow(orderworkflow.OrderWorkflow)
+	temporalWorker.RegisterWorkflow(orderworkflow.StopListWorkflow)
+	temporalWorker.RegisterActivity(orderworkflow.NewActivities(orderRepo, payments.NewMock()))
+	temporalWorker.RegisterActivity(orderworkflow.NewStopListActivities(merchant.NewRepository(pool)))
+
+	g.Go(func() error {
+		defer temporalWorker.Stop()
+
+		if startErr := temporalWorker.Start(); startErr != nil {
+			return fmt.Errorf("запуск Temporal worker: %w", startErr)
+		}
+
+		log.InfoContext(ctx, "Temporal worker запущен",
+			slog.String("task_queue", cfg.Temporal.TaskQueue))
+
+		<-ctx.Done()
+
+		return nil
+	})
+
+	// Страховка на запуск процесса: если синхронный вызов из API не удался,
+	// процесс поднимется по событию оформления.
+	starter, starterErr := kafkax.NewConsumer(
+		cfg.Kafka, kafkax.GroupWorkflowStarter, []string{kafkax.TopicOrderEvents},
+		orderworkflow.NewStarter(process, log), producer, log)
+	if starterErr != nil {
+		return starterErr
+	}
+
+	g.Go(func() error { return starter.Run(ctx) })
 
 	if err := g.Wait(); err != nil {
 		return err

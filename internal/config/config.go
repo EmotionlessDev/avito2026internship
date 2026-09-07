@@ -81,6 +81,22 @@ type Kafka struct {
 	Timeout           time.Duration
 }
 
+// Temporal — подключение к движку оркестрации.
+type Temporal struct {
+	HostPort  string
+	Namespace string
+	TaskQueue string
+	// ConnectRetryInterval — пауза между попытками подключения на старте:
+	// auto-setup в стенде поднимается около сорока секунд.
+	ConnectRetryInterval time.Duration
+	// ConfirmationTimeout — сколько заказ ждёт ответа заведения. Вынесен
+	// в конфигурацию ради демо и e2e: ждать семь минут в прогоне сценариев
+	// незачем, а поведение процесса от величины срока не зависит.
+	ConfirmationTimeout time.Duration
+	CookingSLA          time.Duration
+	DeliverySLA         time.Duration
+}
+
 // Outbox — параметры доставки событий из базы в брокер.
 type Outbox struct {
 	BatchSize    int
@@ -93,6 +109,7 @@ type KitchenAPI struct {
 	App
 	HTTP     HTTP
 	Postgres Postgres
+	Temporal Temporal
 }
 
 // KitchenWorker — конфигурация воркера. Свой HTTP-сервер он поднимает только
@@ -103,6 +120,7 @@ type KitchenWorker struct {
 	Postgres Postgres
 	Kafka    Kafka
 	Outbox   Outbox
+	Temporal Temporal
 }
 
 // LoadKitchenAPI читает конфигурацию kitchen-api.
@@ -112,6 +130,7 @@ func LoadKitchenAPI() (KitchenAPI, error) {
 		App:      l.app("kitchen-api"),
 		HTTP:     l.http(":8080"),
 		Postgres: l.postgres(),
+		Temporal: l.temporal(),
 	}
 
 	if err := l.err(); err != nil {
@@ -130,6 +149,7 @@ func LoadKitchenWorker() (KitchenWorker, error) {
 		Postgres: l.postgres(),
 		Kafka:    l.kafka(),
 		Outbox:   l.outbox(),
+		Temporal: l.temporal(),
 	}
 
 	if err := l.err(); err != nil {
@@ -225,5 +245,18 @@ func (l *loader) outbox() Outbox {
 		// поэтому интервал может быть спокойным.
 		PollInterval: l.duration("OUTBOX_POLL_INTERVAL", 2*time.Second),
 		MaxAttempts:  int(l.int32("OUTBOX_MAX_ATTEMPTS", 5)),
+	}
+}
+
+func (l *loader) temporal() Temporal {
+	return Temporal{
+		HostPort:  l.str("TEMPORAL_HOSTPORT", "localhost:7233"),
+		Namespace: l.str("TEMPORAL_NAMESPACE", "default"),
+		// Очередь одна на все процессы заказа: разделять по типам пока нечего.
+		TaskQueue:            l.str("TEMPORAL_TASK_QUEUE", "kitchen-orders"),
+		ConnectRetryInterval: l.duration("TEMPORAL_CONNECT_RETRY_INTERVAL", 2*time.Second),
+		ConfirmationTimeout:  l.duration("ORDER_CONFIRMATION_TIMEOUT", 7*time.Minute),
+		CookingSLA:           l.duration("ORDER_COOKING_SLA", 30*time.Minute),
+		DeliverySLA:          l.duration("ORDER_DELIVERY_SLA", 45*time.Minute),
 	}
 }

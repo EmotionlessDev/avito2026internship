@@ -2,6 +2,8 @@ package order_test
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/emotionlessdev/avito-kitchen/internal/cart"
@@ -80,6 +82,54 @@ func (f *fakeStore) ListByVenue(
 	return nil, nil
 }
 
+// fakeProcess запоминает, что сервис попросил у процесса заказа.
+// Сам процесс проверяется отдельно, в тестах workflow.
+type fakeProcess struct {
+	started   []order.ProcessInput
+	cancelled []uuid.UUID
+	accepted  []uuid.UUID
+	rejected  []uuid.UUID
+	err       error
+}
+
+func (f *fakeProcess) Start(_ context.Context, input order.ProcessInput) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	f.started = append(f.started, input)
+
+	return nil
+}
+
+func (f *fakeProcess) VenueAccepted(_ context.Context, orderID uuid.UUID, _ int) error {
+	f.accepted = append(f.accepted, orderID)
+
+	return f.err
+}
+
+func (f *fakeProcess) VenueRejected(_ context.Context, orderID uuid.UUID, _ string) error {
+	f.rejected = append(f.rejected, orderID)
+
+	return f.err
+}
+
+func (f *fakeProcess) Ready(_ context.Context, _ uuid.UUID) error { return f.err }
+
+func (f *fakeProcess) Delivered(_ context.Context, _ uuid.UUID) error { return f.err }
+
+func (f *fakeProcess) Cancel(_ context.Context, orderID uuid.UUID, _ string) error {
+	f.cancelled = append(f.cancelled, orderID)
+
+	return f.err
+}
+
+// testLogger гасит вывод: сервис пишет предупреждение, когда процесс
+// не стартовал, и в тестах этот шум не нужен.
+func testLogger() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
+}
+
 // fakeCarts отдаёт корзину и заранее заданный диагноз каскада.
 type fakeCarts struct {
 	cart    cart.Cart
@@ -150,7 +200,7 @@ func TestCreateFromValidCart(t *testing.T) {
 
 	store := newStore()
 	carts := &fakeCarts{cart: filledCart(), result: validResult()}
-	service := order.NewService(store, carts, fakeVenues{})
+	service := order.NewService(store, carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	created, isNew, err := service.Create(t.Context(), userID, request("key-1"))
 
@@ -175,7 +225,7 @@ func TestCreateIsIdempotent(t *testing.T) {
 
 	store := newStore()
 	carts := &fakeCarts{cart: filledCart(), result: validResult()}
-	service := order.NewService(store, carts, fakeVenues{})
+	service := order.NewService(store, carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	first, isNew, err := service.Create(t.Context(), userID, request("key-1"))
 	require.NoError(t, err)
@@ -199,7 +249,7 @@ func TestCreateRejectsBlockingIssues(t *testing.T) {
 
 	store := newStore()
 	carts := &fakeCarts{cart: filledCart(), result: result}
-	service := order.NewService(store, carts, fakeVenues{})
+	service := order.NewService(store, carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	_, _, err := service.Create(t.Context(), userID, request("key-1"))
 
@@ -221,7 +271,7 @@ func TestCreatePriceChangedNeedsConfirmation(t *testing.T) {
 
 	store := newStore()
 	carts := &fakeCarts{cart: filledCart(), result: result}
-	service := order.NewService(store, carts, fakeVenues{})
+	service := order.NewService(store, carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	_, _, err := service.Create(t.Context(), userID, request("key-1"))
 	require.ErrorIs(t, err, order.ErrCartNotValid)
@@ -246,7 +296,7 @@ func TestCreateAcceptFlagDoesNotBypassBlocking(t *testing.T) {
 	}
 
 	carts := &fakeCarts{cart: filledCart(), result: result}
-	service := order.NewService(newStore(), carts, fakeVenues{})
+	service := order.NewService(newStore(), carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	accepted := request("key-1")
 	accepted.AcceptPriceChanges = true
@@ -263,7 +313,7 @@ func TestCreateRejectsEmptyCart(t *testing.T) {
 	t.Parallel()
 
 	carts := &fakeCarts{cart: cart.Cart{UserID: userID}, result: cart.Result{}}
-	service := order.NewService(newStore(), carts, fakeVenues{})
+	service := order.NewService(newStore(), carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	_, _, err := service.Create(t.Context(), userID, request("key-1"))
 
@@ -277,7 +327,7 @@ func TestCreateRepeatAfterCartCleared(t *testing.T) {
 
 	store := newStore()
 	carts := &fakeCarts{cart: filledCart(), result: validResult()}
-	service := order.NewService(store, carts, fakeVenues{})
+	service := order.NewService(store, carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	first, _, err := service.Create(t.Context(), userID, request("key-1"))
 	require.NoError(t, err)
@@ -301,7 +351,7 @@ func TestCreateRejectsSameKeyWithDifferentBody(t *testing.T) {
 
 	store := newStore()
 	carts := &fakeCarts{cart: filledCart(), result: validResult()}
-	service := order.NewService(store, carts, fakeVenues{})
+	service := order.NewService(store, carts, fakeVenues{}, &fakeProcess{}, testLogger())
 
 	_, _, err := service.Create(t.Context(), userID, request("key-1"))
 	require.NoError(t, err)
@@ -331,3 +381,38 @@ func TestFingerprintDependsOnRequestFields(t *testing.T) {
 	assert.Equal(t, order.Fingerprint(base), order.Fingerprint(sameKeyOtherRequest),
 		"сам ключ в отпечаток не входит: он и так проверяется отдельно")
 }
+
+// Процесс заказа запускается сразу после оформления — это быстрый путь;
+// страховкой служит потребитель событий.
+func TestCreateStartsProcess(t *testing.T) {
+	t.Parallel()
+
+	process := &fakeProcess{}
+	carts := &fakeCarts{cart: filledCart(), result: validResult()}
+	service := order.NewService(newStore(), carts, fakeVenues{}, process, testLogger())
+
+	created, _, err := service.Create(t.Context(), userID, request("key-1"))
+	require.NoError(t, err)
+
+	require.Len(t, process.started, 1)
+	assert.Equal(t, created.ID, process.started[0].OrderID)
+	assert.Equal(t, created.TotalAmountMinor, process.started[0].TotalAmountMinor)
+}
+
+// Заказ уже создан, поэтому неудачный запуск процесса не должен превращаться
+// в ошибку для клиента: процесс поднимет страховочный потребитель.
+func TestCreateSurvivesProcessFailure(t *testing.T) {
+	t.Parallel()
+
+	process := &fakeProcess{err: errProcessUnavailable}
+	carts := &fakeCarts{cart: filledCart(), result: validResult()}
+	service := order.NewService(newStore(), carts, fakeVenues{}, process, testLogger())
+
+	created, isNew, err := service.Create(t.Context(), userID, request("key-1"))
+
+	require.NoError(t, err)
+	assert.True(t, isNew)
+	assert.NotEmpty(t, created.Number)
+}
+
+var errProcessUnavailable = errors.New("оркестратор недоступен")

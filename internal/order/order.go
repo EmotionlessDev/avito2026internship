@@ -57,6 +57,16 @@ var (
 	ErrIdempotencyConflict = errors.New("ключ идемпотентности уже использован")
 )
 
+// ErrNotCancellable — заказ уже нельзя отменить: машина состояний
+// не разрешает переход (сценарий U11).
+type ErrNotCancellable struct {
+	Status Status
+}
+
+func (e ErrNotCancellable) Error() string {
+	return "заказ в статусе " + string(e.Status) + " отменить нельзя"
+}
+
 // Order — заказ вместе с составом и историей переходов.
 type Order struct {
 	ID        uuid.UUID

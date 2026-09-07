@@ -153,3 +153,32 @@ func TestServerShutsDownOnContextCancel(t *testing.T) {
 	// down` будет ждать таймаута и убивать контейнер по SIGKILL.
 	require.NoError(t, <-done)
 }
+
+// SSE не работает без проталкивания буфера, а обёртка access-лога скрывает
+// http.Flusher нижележащего writer'а. Тест держит это на месте.
+func TestAccessLogWriterSupportsFlush(t *testing.T) {
+	t.Parallel()
+
+	isFlusher := false
+
+	handler := httpx.AccessLog(slog.New(slog.DiscardHandler))(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			flusher, ok := w.(http.Flusher)
+			isFlusher = ok
+
+			if !ok {
+				return
+			}
+
+			_, _ = w.Write([]byte("event: ping\n\n"))
+			flusher.Flush()
+		}))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/stream", http.NoBody)
+	handler.ServeHTTP(recorder, request)
+
+	require.True(t, isFlusher, "обёртка обязана оставаться Flusher'ом")
+
+	assert.Contains(t, recorder.Body.String(), "event: ping")
+}
