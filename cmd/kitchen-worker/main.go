@@ -129,7 +129,11 @@ func run() error {
 	// подключение к базе и платёжному провайдеру — сам workflow к ним
 	// не ходит, ему нельзя.
 	orderRepo := order.NewRepository(pool)
-	process := orderworkflow.NewProcess(temporal, cfg.Temporal.TaskQueue)
+	process := orderworkflow.NewProcess(temporal, cfg.Temporal.TaskQueue, orderworkflow.Timings{
+		Confirmation: cfg.Temporal.ConfirmationTimeout,
+		CookingSLA:   cfg.Temporal.CookingSLA,
+		DeliverySLA:  cfg.Temporal.DeliverySLA,
+	})
 
 	temporalWorker := worker.New(temporal, cfg.Temporal.TaskQueue, worker.Options{})
 	temporalWorker.RegisterWorkflow(orderworkflow.OrderWorkflow)

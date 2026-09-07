@@ -89,6 +89,12 @@ type Temporal struct {
 	// ConnectRetryInterval — пауза между попытками подключения на старте:
 	// auto-setup в стенде поднимается около сорока секунд.
 	ConnectRetryInterval time.Duration
+	// ConfirmationTimeout — сколько заказ ждёт ответа заведения. Вынесен
+	// в конфигурацию ради демо и e2e: ждать семь минут в прогоне сценариев
+	// незачем, а поведение процесса от величины срока не зависит.
+	ConfirmationTimeout time.Duration
+	CookingSLA          time.Duration
+	DeliverySLA         time.Duration
 }
 
 // Outbox — параметры доставки событий из базы в брокер.
@@ -249,5 +255,8 @@ func (l *loader) temporal() Temporal {
 		// Очередь одна на все процессы заказа: разделять по типам пока нечего.
 		TaskQueue:            l.str("TEMPORAL_TASK_QUEUE", "kitchen-orders"),
 		ConnectRetryInterval: l.duration("TEMPORAL_CONNECT_RETRY_INTERVAL", 2*time.Second),
+		ConfirmationTimeout:  l.duration("ORDER_CONFIRMATION_TIMEOUT", 7*time.Minute),
+		CookingSLA:           l.duration("ORDER_COOKING_SLA", 30*time.Minute),
+		DeliverySLA:          l.duration("ORDER_DELIVERY_SLA", 45*time.Minute),
 	}
 }

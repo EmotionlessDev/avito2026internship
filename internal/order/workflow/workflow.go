@@ -44,6 +44,10 @@ type OrderInput struct {
 	VenueID          uuid.UUID `json:"venue_id"`
 	Number           string    `json:"number"`
 	TotalAmountMinor int64     `json:"total_amount_minor"`
+	// Timings едут во входе, а не читаются из конфигурации внутри workflow:
+	// значения попадают в историю и переживают перезапуск с другими
+	// настройками. Читать конфиг в коде workflow нельзя — replay разъедется.
+	Timings Timings `json:"timings"`
 }
 
 // VenueDecision — решение заведения по заказу.
@@ -81,6 +85,26 @@ func DefaultTimings() Timings {
 	}
 }
 
+// orDefaults подставляет значения по умолчанию вместо незаданных: процессы,
+// запущенные до появления этого поля, продолжают работать с прежними сроками.
+func (t Timings) orDefaults() Timings {
+	defaults := DefaultTimings()
+
+	if t.Confirmation <= 0 {
+		t.Confirmation = defaults.Confirmation
+	}
+
+	if t.CookingSLA <= 0 {
+		t.CookingSLA = defaults.CookingSLA
+	}
+
+	if t.DeliverySLA <= 0 {
+		t.DeliverySLA = defaults.DeliverySLA
+	}
+
+	return t
+}
+
 // activityOptions — общие настройки активностей.
 //
 // Ретраи здесь честные: сеть до POS может моргнуть, база — быть занята.
@@ -108,7 +132,7 @@ func activityOptions() sdk.ActivityOptions {
 // либо конечным статусом, либо следующим ожиданием: «зависших» состояний
 // без таймера или сигнала в процессе нет.
 func OrderWorkflow(ctx sdk.Context, input OrderInput) error {
-	timings := DefaultTimings()
+	timings := input.Timings.orDefaults()
 	ctx = sdk.WithActivityOptions(ctx, activityOptions())
 	log := sdk.GetLogger(ctx)
 

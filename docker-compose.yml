@@ -27,6 +27,9 @@ x-app-env: &app-env
   # (localhost:9094) существует только для консольных утилит с хоста.
   KAFKA_BROKERS: kafka:9092
   TEMPORAL_HOSTPORT: temporal:7233
+  # Срок подтверждения заказа заведением. По умолчанию боевые семь минут;
+  # демо-прогон переопределяет его секундами через .env.
+  ORDER_CONFIRMATION_TIMEOUT: ${ORDER_CONFIRMATION_TIMEOUT:-7m}
 
 services:
   postgres:

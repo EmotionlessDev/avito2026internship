@@ -27,11 +27,15 @@ func isAlreadyStarted(err error) bool {
 type Process struct {
 	temporal  client.Client
 	taskQueue string
+	timings   Timings
 }
 
 // NewProcess собирает клиента процессов.
-func NewProcess(temporal client.Client, taskQueue string) *Process {
-	return &Process{temporal: temporal, taskQueue: taskQueue}
+//
+// Сроки задаются здесь и уезжают во вход workflow: так их можно ускорить
+// для демо и e2e, не трогая код процесса и не ломая детерминизм.
+func NewProcess(temporal client.Client, taskQueue string, timings Timings) *Process {
+	return &Process{temporal: temporal, taskQueue: taskQueue, timings: timings}
 }
 
 // Start запускает процесс заказа.
@@ -54,6 +58,7 @@ func (p *Process) Start(ctx context.Context, input order.ProcessInput) error {
 		VenueID:          input.VenueID,
 		Number:           input.Number,
 		TotalAmountMinor: input.TotalAmountMinor,
+		Timings:          p.timings,
 	})
 	if err != nil {
 		if isAlreadyStarted(err) {

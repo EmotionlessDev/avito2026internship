@@ -80,7 +80,11 @@ func run() error {
 	// Корзине нужен каталог: состояние заведения для каскада валидации
 	// берётся оттуда, где живут расписание и геометрия.
 	cartService := cart.NewService(cart.NewRepository(pool), catalogService)
-	orderProcess := orderworkflow.NewProcess(temporal, cfg.Temporal.TaskQueue)
+	orderProcess := orderworkflow.NewProcess(temporal, cfg.Temporal.TaskQueue, orderworkflow.Timings{
+		Confirmation: cfg.Temporal.ConfirmationTimeout,
+		CookingSLA:   cfg.Temporal.CookingSLA,
+		DeliverySLA:  cfg.Temporal.DeliverySLA,
+	})
 	orderService := order.NewService(
 		order.NewRepository(pool), cartService, catalogService, orderProcess, log)
 
