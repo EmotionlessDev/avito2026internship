@@ -86,9 +86,21 @@ func (s *Service) Create(
 	// оформления корзина пуста, и повтор, начатый с проверок, увидел бы
 	// пустую корзину вместо уже созданного заказа — то есть ответил бы
 	// ошибкой на честный ретрай сети.
-	if existing, found, err := s.store.ByIdempotencyKey(ctx, userID, request.IdempotencyKey); err != nil {
+	fingerprint := Fingerprint(request)
+
+	existing, found, err := s.store.ByIdempotencyKey(ctx, userID, request.IdempotencyKey)
+	if err != nil {
 		return Order{}, false, err
-	} else if found {
+	}
+
+	if found {
+		// Тот же ключ с другим телом — не ретрай, а ошибка клиента.
+		// Вернуть старый заказ значит тихо проигнорировать новый адрес
+		// или телефон, поэтому здесь 409, а не 200.
+		if existing.Fingerprint != fingerprint {
+			return Order{}, false, ErrIdempotencyConflict
+		}
+
 		return existing, false, nil
 	}
 
@@ -118,6 +130,7 @@ func (s *Service) Create(
 	}
 
 	draft := draftFrom(current, venue, validation, request)
+	draft.Fingerprint = fingerprint
 
 	created, isNew, err := s.store.Create(ctx, draft)
 	if err != nil {

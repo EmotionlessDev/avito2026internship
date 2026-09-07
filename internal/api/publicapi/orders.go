@@ -127,6 +127,14 @@ func (h *Handler) GetOrder(
 }
 
 func createOrderError(ctx context.Context, err error) (public.CreateOrderResponseObject, error) {
+	if errors.Is(err, order.ErrIdempotencyConflict) {
+		return public.CreateOrder409ApplicationProblemPlusJSONResponse(
+			problem(ctx, http.StatusConflict, "IDEMPOTENCY_KEY_CONFLICT",
+				"Ключ идемпотентности уже использован",
+				"Тем же ключом оформлен другой заказ: повторите с новым Idempotency-Key"),
+		), nil
+	}
+
 	var validation order.ValidationError
 	if errors.As(err, &validation) {
 		problem := problem(ctx, http.StatusUnprocessableEntity, "CART_NOT_VALID",

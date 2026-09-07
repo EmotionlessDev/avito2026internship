@@ -39,6 +39,7 @@ type Draft struct {
 	ContactPhone     string
 	Comment          string
 	IdempotencyKey   string
+	Fingerprint      string
 	VenueName        string
 	Items            []DraftItem
 }
@@ -152,12 +153,13 @@ func insertOrder(ctx context.Context, tx pgx.Tx, draft Draft) (uuid.UUID, string
 		INSERT INTO orders (id, number, user_id, venue_id, status,
 		                    items_amount_minor, delivery_fee_minor, total_amount_minor,
 		                    delivery_address, delivery_lat, delivery_lon, contact_phone,
-		                    comment, idempotency_key, workflow_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		                    comment, idempotency_key, idempotency_fingerprint, workflow_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		orderID, number, draft.UserID, draft.VenueID, StatusCreated,
 		draft.ItemsAmountMinor, draft.DeliveryFeeMinor, draft.TotalAmountMinor,
 		draft.DeliveryAddress, draft.DeliveryPoint.Lat, draft.DeliveryPoint.Lon,
-		draft.ContactPhone, draft.Comment, draft.IdempotencyKey, WorkflowIDFor(orderID))
+		draft.ContactPhone, draft.Comment, draft.IdempotencyKey, draft.Fingerprint,
+		WorkflowIDFor(orderID))
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("создание заказа: %w", err)
 	}

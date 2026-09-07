@@ -266,7 +266,7 @@ func orderResponse(current order.Order) public.Order {
 		timeline = append(timeline, statusEvent(current.Timeline[i]))
 	}
 
-	return public.Order{
+	response := public.Order{
 		Id:               current.ID,
 		Number:           current.Number,
 		VenueId:          current.VenueID,
@@ -285,6 +285,15 @@ func orderResponse(current order.Order) public.Order {
 		CompletedAt:      current.CompletedAt,
 		Timeline:         timeline,
 	}
+
+	// Комментарий возвращаем только когда он есть: пустая строка в ответе
+	// выглядела бы как «пользователь написал пустоту».
+	if current.Comment != "" {
+		comment := current.Comment
+		response.Comment = &comment
+	}
+
+	return response
 }
 
 func orderItem(item order.Item) public.OrderItem {

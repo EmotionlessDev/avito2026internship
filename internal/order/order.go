@@ -78,6 +78,10 @@ type Order struct {
 	ETAMinutes   *int
 	CancelReason *string
 	WorkflowID   string
+	// Fingerprint — отпечаток запроса, которым заказ был оформлен.
+	// По нему повтор с тем же ключом отличается от чужого запроса
+	// с тем же ключом.
+	Fingerprint string
 
 	CreatedAt   time.Time
 	PlacedAt    *time.Time

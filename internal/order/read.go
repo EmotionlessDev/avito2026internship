@@ -15,7 +15,7 @@ const orderColumns = `
 	o.id, o.number, o.user_id, o.venue_id, v.name, o.status,
 	o.items_amount_minor, o.delivery_fee_minor, o.total_amount_minor,
 	o.delivery_address, o.delivery_lat, o.delivery_lon, o.contact_phone,
-	o.comment, o.eta_minutes, o.cancel_reason, o.workflow_id,
+	o.comment, o.eta_minutes, o.cancel_reason, o.workflow_id, o.idempotency_fingerprint,
 	o.created_at, o.placed_at, o.completed_at`
 
 // Filter — параметры выдачи ленты заказов.
@@ -144,7 +144,7 @@ func collectOrders(rows pgx.Rows) ([]Order, error) {
 			&current.Status, &current.ItemsAmountMinor, &current.DeliveryFeeMinor,
 			&current.TotalAmountMinor, &current.DeliveryAddress, &current.DeliveryPoint.Lat,
 			&current.DeliveryPoint.Lon, &current.ContactPhone, &comment, &current.ETAMinutes,
-			&current.CancelReason, &current.WorkflowID, &current.CreatedAt,
+			&current.CancelReason, &current.WorkflowID, &current.Fingerprint, &current.CreatedAt,
 			&current.PlacedAt, &current.CompletedAt,
 		); err != nil {
 			return nil, fmt.Errorf("чтение заказа: %w", err)

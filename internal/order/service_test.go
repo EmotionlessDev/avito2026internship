@@ -43,6 +43,7 @@ func (f *fakeStore) Create(_ context.Context, draft order.Draft) (order.Order, b
 		Status:           order.StatusCreated,
 		ItemsAmountMinor: draft.ItemsAmountMinor,
 		TotalAmountMinor: draft.TotalAmountMinor,
+		Fingerprint:      draft.Fingerprint,
 	}
 
 	f.byKey[draft.IdempotencyKey] = created
@@ -291,4 +292,42 @@ func TestCreateRepeatAfterCartCleared(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, isNew)
 	assert.Equal(t, first.ID, second.ID)
+}
+
+// Тот же ключ с другим телом — ошибка клиента: старый заказ вернуть нельзя,
+// иначе новый адрес доставки тихо потеряется.
+func TestCreateRejectsSameKeyWithDifferentBody(t *testing.T) {
+	t.Parallel()
+
+	store := newStore()
+	carts := &fakeCarts{cart: filledCart(), result: validResult()}
+	service := order.NewService(store, carts, fakeVenues{})
+
+	_, _, err := service.Create(t.Context(), userID, request("key-1"))
+	require.NoError(t, err)
+
+	other := request("key-1")
+	other.Delivery.Address = "Москва, другой адрес, 1"
+
+	_, _, err = service.Create(t.Context(), userID, other)
+
+	require.ErrorIs(t, err, order.ErrIdempotencyConflict)
+	assert.Len(t, store.created, 1, "второй заказ не создан")
+}
+
+func TestFingerprintDependsOnRequestFields(t *testing.T) {
+	t.Parallel()
+
+	base := request("key-1")
+
+	other := base
+	other.ContactPhone = "+79990000002"
+
+	sameKeyOtherRequest := base
+	sameKeyOtherRequest.IdempotencyKey = "key-2"
+
+	assert.NotEqual(t, order.Fingerprint(base), order.Fingerprint(other),
+		"телефон входит в отпечаток")
+	assert.Equal(t, order.Fingerprint(base), order.Fingerprint(sameKeyOtherRequest),
+		"сам ключ в отпечаток не входит: он и так проверяется отдельно")
 }
