@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -492,4 +493,69 @@ func databaseNow(t *testing.T) time.Time {
 	require.NoError(t, pool.QueryRow(testContext(t), `SELECT now()`).Scan(&now))
 
 	return now
+}
+
+// Гонка не должна прятать ошибку клиента: если два одновременных запроса
+// с одним ключом несут разные тела, второй обязан получить 409, а не чужой
+// заказ. Проверка отпечатка до коммита соседа тут не срабатывает — оба
+// запроса проходят её, пока ни один ещё не записан.
+func TestOrderCreateConflictSurvivesConcurrentDifferentBody(t *testing.T) {
+	ctx := testContext(t)
+	repo := order.NewRepository(pool)
+
+	key := uuid.NewString()
+
+	first := orderDraft(key)
+	first.Fingerprint = "отпечаток-первого"
+	first.DeliveryAddress = "Москва, Пятницкая улица, 20"
+
+	second := orderDraft(key)
+	second.Fingerprint = "отпечаток-второго"
+	second.DeliveryAddress = "Москва, другой адрес"
+
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		succeeded []order.Order
+		conflicts int
+		other     []error
+	)
+
+	wg.Add(2)
+
+	for _, draft := range []order.Draft{first, second} {
+		go func() {
+			defer wg.Done()
+
+			got, _, err := repo.Create(ctx, draft)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				succeeded = append(succeeded, got)
+			case errors.Is(err, order.ErrIdempotencyConflict):
+				conflicts++
+			default:
+				other = append(other, err)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	require.Empty(t, other, "других ошибок быть не должно")
+
+	var stored int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM orders WHERE user_id = $1 AND idempotency_key = $2`,
+		first.UserID, key).Scan(&stored))
+	assert.Equal(t, 1, stored, "заказ по ключу всегда один")
+
+	// Гонка могла разрешиться и последовательно — тогда второй запрос
+	// упёрся в проверку отпечатка ещё до вставки. Важно одно: чужое тело
+	// никогда не получает чужой заказ.
+	require.Len(t, succeeded, 1, "успешным может быть только один запрос")
+	assert.Equal(t, 1, conflicts, "второй обязан получить конфликт ключа")
 }

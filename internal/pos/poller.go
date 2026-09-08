@@ -35,7 +35,9 @@ func (s *Service) runPoller(ctx context.Context) {
 }
 
 func (s *Service) poll(ctx context.Context) {
-	orders, err := s.platform.NewOrders(ctx)
+	since := s.pollSince()
+
+	orders, err := s.platform.NewOrders(ctx, since)
 	if err != nil {
 		s.log.DebugContext(ctx, "поллинг не удался", slog.String("error", err.Error()))
 
@@ -43,6 +45,7 @@ func (s *Service) poll(ctx context.Context) {
 	}
 
 	now := time.Now().UTC()
+	s.rememberPoll(now)
 
 	for i := range orders {
 		payload, err := json.Marshal(orders[i])
@@ -70,4 +73,34 @@ func (s *Service) poll(ctx context.Context) {
 				slog.String("order", orders[i].Number))
 		}
 	}
+}
+
+// pollOverlap — насколько отсечка сдвигается назад относительно прошлого тика.
+//
+// Часы платформы и заведения расходятся, а заказ, попавший в ленту ровно
+// в момент отсечки, при строгом сравнении провалился бы между тиками.
+// Перечитать десяток заказов дешевле, чем потерять один: приём заказов
+// идемпотентен по идентификатору платформы.
+const pollOverlap = 30 * time.Second
+
+// pollSince отдаёт отсечку для очередного тика. Пустая означает «всю ленту»:
+// так заведение читает её на первом тике и после перезапуска.
+func (s *Service) pollSince() *time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.lastPoll.IsZero() {
+		return nil
+	}
+
+	since := s.lastPoll.Add(-pollOverlap)
+
+	return &since
+}
+
+func (s *Service) rememberPoll(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.lastPoll = at
 }

@@ -75,8 +75,7 @@ func (r *Repository) Create(ctx context.Context, draft Draft) (Order, bool, erro
 
 	// Проверка ключа и вставка — это check-then-act: между ними успевает
 	// вклиниться параллельный запрос с тем же ключом, и уникальный индекс
-	// ловит его на INSERT. Для клиента это не ошибка, а тот же ретрай:
-	// перечитываем заказ, который успел создать сосед.
+	// ловит его на INSERT. Перечитываем заказ, который успел создать сосед.
 	if isDuplicateIdempotencyKey(err) {
 		existing, found, lookupErr := r.ByIdempotencyKey(ctx, draft.UserID, draft.IdempotencyKey)
 		if lookupErr != nil {
@@ -84,6 +83,14 @@ func (r *Repository) Create(ctx context.Context, draft Draft) (Order, bool, erro
 		}
 
 		if found {
+			// Отпечаток сравнивается и здесь, а не только в сервисе: в гонке
+			// оба запроса проходят его проверку до коммита соседа, и без
+			// повторного сравнения запрос с другим адресом получил бы 200
+			// и чужой заказ вместо 409.
+			if existing.Fingerprint != draft.Fingerprint {
+				return Order{}, false, ErrIdempotencyConflict
+			}
+
 			return existing, false, nil
 		}
 	}
