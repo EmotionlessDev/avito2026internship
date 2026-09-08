@@ -19,8 +19,9 @@ import (
 
 // Handler реализует merchant.StrictServerInterface.
 //
-// Переходы статусов заказа появятся на этапе 7 вместе с Temporal; пока
-// соответствующие ручки отвечают 501.
+// Хендлеры тонкие: перевести контракт в домен, позвать сервис, перевести
+// ответ обратно. Статусы заказа они не пишут — шлют сигнал процессу,
+// а статус проставляет активность внутри workflow.
 type Handler struct {
 	merchant *merchant.Service
 	orders   *order.Service
@@ -130,8 +131,9 @@ func availabilityError(ctx context.Context, err error) (gen.SetAvailabilityRespo
 			BadRequestApplicationProblemPlusJSONResponse: gen.BadRequestApplicationProblemPlusJSONResponse(
 				problem(ctx, http.StatusBadRequest, "SCHEDULED_RETURN_NOT_AVAILABLE",
 					"Авто-возврат пока недоступен",
-					"Поле until появится вместе с планировщиком (этап 7). "+
-						"Снимите позицию без until и верните её вручную."),
+					"Планировщик авто-возврата недоступен — вероятно, "+
+						"не поднялся Temporal. Снимите позицию без until "+
+						"и верните её вручную."),
 			),
 		}, nil
 	default:

@@ -3,6 +3,7 @@ package merchant
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -19,7 +20,7 @@ type Store interface {
 	UpdateVenue(ctx context.Context, settings VenueSettings) error
 	VenueSettingsSnapshot(ctx context.Context) (VenueSettings, error)
 	UpsertWebhook(ctx context.Context, webhook Webhook) (Webhook, error)
-	DailyStats(ctx context.Context) (DailyStats, error)
+	DailyStats(ctx context.Context, day *time.Time) (DailyStats, error)
 }
 
 // Service — операции контура заведений.
@@ -180,11 +181,12 @@ func requestsScheduledReturn(request AvailabilityRequest) bool {
 	return false
 }
 
-// DailyStats отдаёт витрину показателей заведения за сегодня (сценарий M8).
+// DailyStats отдаёт витрину показателей заведения за день (сценарий M8).
+// Пустой day означает «сегодня» в часовом поясе заведения.
 //
 // Сервис здесь ничего не считает: витрину наполняет консьюмер order-events,
 // а чтение — обычный SELECT одной строки. Так отчёт не конкурирует
 // с оформлением заказов за таблицу orders.
-func (s *Service) DailyStats(ctx context.Context) (DailyStats, error) {
-	return s.store.DailyStats(ctx)
+func (s *Service) DailyStats(ctx context.Context, day *time.Time) (DailyStats, error) {
+	return s.store.DailyStats(ctx, day)
 }

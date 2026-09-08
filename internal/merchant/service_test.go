@@ -96,7 +96,7 @@ func (f *fakeStore) UpsertWebhook(_ context.Context, webhook merchant.Webhook) (
 	return merchant.Webhook{URL: webhook.URL, IsActive: true}, nil
 }
 
-func (f *fakeStore) DailyStats(_ context.Context) (merchant.DailyStats, error) {
+func (f *fakeStore) DailyStats(_ context.Context, _ *time.Time) (merchant.DailyStats, error) {
 	return f.stats, nil
 }
 
@@ -234,8 +234,8 @@ func TestSetAvailabilityRejectsScheduledReturnBeforeWriting(t *testing.T) {
 	assert.Zero(t, store.availability.ItemsUpdated, "в базу ничего не ушло")
 }
 
-// Тот же запрос с рабочим планировщиком проходит целиком — на этапе 7
-// достаточно подменить реализацию.
+// Тот же запрос с рабочим планировщиком проходит целиком: сервис не знает,
+// кто стоит за интерфейсом — Temporal или отказ.
 func TestSetAvailabilitySchedulesReturnWhenPlannerAvailable(t *testing.T) {
 	t.Parallel()
 

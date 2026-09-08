@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/emotionlessdev/avito-kitchen/internal/merchant"
 
@@ -330,11 +331,50 @@ func TestMerchantUpsertWebhook(t *testing.T) {
 func TestMerchantDailyStatsReturnsZeroesWhenNoOrders(t *testing.T) {
 	repo := merchant.NewRepository(pool)
 
-	stats, err := repo.DailyStats(tenantContext(t, otherVenue))
+	stats, err := repo.DailyStats(tenantContext(t, otherVenue), nil)
 	require.NoError(t, err)
 
 	assert.Zero(t, stats.OrdersTotal)
 	assert.Zero(t, stats.RevenueMinor)
 	assert.Nil(t, stats.AvgAcceptSeconds, "подтверждений не было — среднего нет")
 	assert.False(t, stats.Date.IsZero(), "день заведения обязан приехать")
+}
+
+// Контракт обещает выбор дня, и он обязан работать: без него заведение
+// не посмотрит вчерашнюю выручку, а параметр в спеке был бы враньём.
+func TestMerchantDailyStatsHonoursRequestedDay(t *testing.T) {
+	ctx := tenantContext(t, demoVenue)
+	repo := merchant.NewRepository(pool)
+
+	past := time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	_, err := pool.Exec(testContext(t), `
+		INSERT INTO venue_daily_stats (venue_id, stat_date, orders_total, orders_completed, revenue_minor)
+		VALUES ($1, $2, 7, 5, 555000)
+		ON CONFLICT (venue_id, stat_date) DO UPDATE
+		SET orders_total = EXCLUDED.orders_total,
+		    orders_completed = EXCLUDED.orders_completed,
+		    revenue_minor = EXCLUDED.revenue_minor`, demoVenue, past)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_, deleteErr := pool.Exec(testContext(t),
+			`DELETE FROM venue_daily_stats WHERE venue_id = $1 AND stat_date = $2`, demoVenue, past)
+		require.NoError(t, deleteErr)
+	})
+
+	asked, err := repo.DailyStats(ctx, &past)
+	require.NoError(t, err)
+
+	assert.Equal(t, past.Format("2006-01-02"), asked.Date.Format("2006-01-02"))
+	assert.Equal(t, 7, asked.OrdersTotal)
+	assert.Equal(t, int64(555000), asked.RevenueMinor)
+
+	// День без данных — нули, а не чужие цифры и не ошибка.
+	empty := time.Date(2019, 5, 5, 0, 0, 0, 0, time.UTC)
+
+	blank, err := repo.DailyStats(ctx, &empty)
+	require.NoError(t, err)
+	assert.Zero(t, blank.OrdersTotal)
+	assert.Equal(t, empty.Format("2006-01-02"), blank.Date.Format("2006-01-02"))
 }

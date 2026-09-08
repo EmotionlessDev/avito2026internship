@@ -13,8 +13,9 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/paging"
 )
 
-// Ручки заказов. Отмена и SSE-поток появятся вместе с Temporal (этап 7):
-// это сигналы workflow, а не запись в таблицу.
+// Ручки заказов. Отмена — сигнал workflow, а не запись в таблицу:
+// статус проставит активность, и orders.status останется проекцией
+// состояния процесса. SSE-поток читает историю статусов из Postgres.
 
 // CreateOrder — оформить заказ.
 func (h *Handler) CreateOrder(

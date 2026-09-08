@@ -77,6 +77,30 @@ func (e ValidationError) Error() string {
 // Is связывает конкретную ошибку с доменным маркером.
 func (e ValidationError) Is(target error) bool { return errors.Is(target, ErrCartNotValid) }
 
+// byIdempotencyKey ищет заказ, уже оформленный этим ключом, и заодно решает,
+// ретрай это или чужой запрос с тем же ключом.
+//
+// Правило одно на два места: ключ проверяется до каскада и ещё раз, если
+// каскад увидел пустую корзину — её мог опустошить параллельный запрос
+// с тем же ключом.
+func (s *Service) byIdempotencyKey(
+	ctx context.Context, userID uuid.UUID, key, fingerprint string,
+) (Order, bool, error) {
+	existing, found, err := s.store.ByIdempotencyKey(ctx, userID, key)
+	if err != nil || !found {
+		return Order{}, false, err
+	}
+
+	// Тот же ключ с другим телом — не ретрай, а ошибка клиента. Вернуть
+	// старый заказ значит тихо проигнорировать новый адрес или телефон,
+	// поэтому здесь 409, а не 200.
+	if existing.Fingerprint != fingerprint {
+		return Order{}, false, ErrIdempotencyConflict
+	}
+
+	return existing, true, nil
+}
+
 // Create оформляет заказ из корзины пользователя.
 //
 // Порядок важен: сначала каскад проверок, потом запись. Заказ, оформленный
@@ -91,19 +115,12 @@ func (s *Service) Create(
 	// ошибкой на честный ретрай сети.
 	fingerprint := Fingerprint(request)
 
-	existing, found, err := s.store.ByIdempotencyKey(ctx, userID, request.IdempotencyKey)
+	existing, found, err := s.byIdempotencyKey(ctx, userID, request.IdempotencyKey, fingerprint)
 	if err != nil {
 		return Order{}, false, err
 	}
 
 	if found {
-		// Тот же ключ с другим телом — не ретрай, а ошибка клиента.
-		// Вернуть старый заказ значит тихо проигнорировать новый адрес
-		// или телефон, поэтому здесь 409, а не 200.
-		if existing.Fingerprint != fingerprint {
-			return Order{}, false, ErrIdempotencyConflict
-		}
-
 		return existing, false, nil
 	}
 
@@ -124,6 +141,19 @@ func (s *Service) Create(
 	}
 
 	if current.IsEmpty() || current.VenueID == nil {
+		// Корзина могла опустеть не потому, что её нечем наполнить, а потому
+		// что параллельный запрос с тем же ключом уже оформил заказ и очистил
+		// её. Отвечать на честный ретрай «корзина пуста» нельзя — сначала
+		// смотрим, не появился ли заказ, пока мы проверяли каскад.
+		raced, found, lookupErr := s.byIdempotencyKey(ctx, userID, request.IdempotencyKey, fingerprint)
+		if lookupErr != nil {
+			return Order{}, false, lookupErr
+		}
+
+		if found {
+			return raced, false, nil
+		}
+
 		return Order{}, false, ErrCartEmpty
 	}
 

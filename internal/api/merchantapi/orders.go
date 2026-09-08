@@ -12,7 +12,8 @@ import (
 )
 
 // Чтение заказов заведением. Переходы статусов (accept, reject, ready,
-// delivered) — сигналы workflow, они появятся на этапе 7.
+// delivered) — сигналы workflow: хендлер проверяет право на переход
+// и шлёт сигнал, а статус пишет активность внутри процесса.
 
 // ListVenueOrders — лента заказов заведения.
 //
@@ -39,9 +40,10 @@ func (h *Handler) ListVenueOrders(
 	limit := pageLimit(request.Params.Limit)
 
 	orders, err := h.orders.ListForVenue(ctx, venueID, order.Filter{
-		Statuses: venueOrderStatuses(request.Params.Status),
-		Limit:    limit + 1,
-		Offset:   offset,
+		Statuses:     venueOrderStatuses(request.Params.Status),
+		UpdatedSince: request.Params.Since,
+		Limit:        limit + 1,
+		Offset:       offset,
 	})
 	if err != nil {
 		return nil, err

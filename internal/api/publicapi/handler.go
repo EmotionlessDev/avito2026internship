@@ -22,8 +22,9 @@ import (
 
 // Handler реализует public.StrictServerInterface.
 //
-// Отмена заказа и SSE-поток статусов остаются заглушками до этапа 7:
-// это сигналы workflow, а не запись в таблицу — см. notImplemented.
+// Хендлеры тонкие: перевести контракт в домен, позвать сервис, перевести
+// ответ обратно. Отмена заказа — сигнал workflow, а не запись в таблицу,
+// поэтому статус после неё меняет активность, а не хендлер.
 type Handler struct {
 	catalog *catalog.Service
 	search  *search.Service
