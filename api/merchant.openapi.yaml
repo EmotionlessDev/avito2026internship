@@ -86,13 +86,15 @@ paths:
             schema: { $ref: '#/components/schemas/AvailabilityRequest' }
       responses:
         '200':
-          description: Сколько позиций и опций переключено
+          description: |
+            Сколько позиций и опций переключено. Неизвестные артикулы
+            приезжают в `not_found`, а не отдельным кодом: это батч, и
+            одна опечатка не должна отменять остальные переключения.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AvailabilityResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
 
   /orders:
     get:

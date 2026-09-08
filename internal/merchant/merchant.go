@@ -28,7 +28,8 @@ var (
 	// ErrEmptyAvailability — в запросе стоп-листа нет ни позиций, ни опций.
 	ErrEmptyAvailability = errors.New("пустой запрос стоп-листа")
 	// ErrScheduledReturnUnavailable — попросили авто-возврат по таймеру,
-	// а планировщик его пока не умеет (появится вместе с Temporal, этап 7).
+	// а планировщик недоступен. В рабочем стенде это означает, что
+	// не поднялся Temporal: сам таймер живёт в StopListWorkflow.
 	ErrScheduledReturnUnavailable = errors.New("авто-возврат из стоп-листа недоступен")
 )
 

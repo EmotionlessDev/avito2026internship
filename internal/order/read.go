@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,8 +22,12 @@ const orderColumns = `
 // Filter — параметры выдачи ленты заказов.
 type Filter struct {
 	Statuses []Status
-	Limit    int
-	Offset   int
+	// UpdatedSince отсекает заказы, не менявшиеся с этого момента.
+	// Нужен поллинг-фолбэку заведения: без него POS на каждом тике
+	// перечитывал бы всю ленту целиком (сценарий M6).
+	UpdatedSince *time.Time
+	Limit        int
+	Offset       int
 }
 
 // ByUser отдаёт заказ пользователя. Чужой заказ неотличим от несуществующего:
@@ -116,8 +121,9 @@ func (r *Repository) list(
 		JOIN venues v ON v.id = o.venue_id
 		WHERE `+where+`
 		  AND (cardinality($2::text[]) = 0 OR o.status = ANY($2))
+		  AND ($3::timestamptz IS NULL OR o.updated_at > $3)
 		ORDER BY o.created_at DESC, o.id DESC
-		LIMIT $3 OFFSET $4`, owner, statuses, filter.Limit, filter.Offset)
+		LIMIT $4 OFFSET $5`, owner, statuses, filter.UpdatedSince, filter.Limit, filter.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("выборка заказов: %w", err)
 	}

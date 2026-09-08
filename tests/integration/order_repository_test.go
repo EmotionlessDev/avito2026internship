@@ -1,7 +1,10 @@
 package integration_test
 
 import (
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/emotionlessdev/avito-kitchen/internal/order"
 
@@ -375,4 +378,184 @@ func ids(orders []order.Order) []uuid.UUID {
 	}
 
 	return out
+}
+
+// Двойной клик и параллельные ретраи сети приходят одновременно: заказ обязан
+// получиться один, и каждый из запросов обязан получить именно его, а не 500
+// от уникального индекса. Проверка ключа и вставка — check-then-act, и без
+// обработки конфликта проигравший получал бы «duplicate key».
+func TestOrderCreateSurvivesConcurrentSameKey(t *testing.T) {
+	ctx := testContext(t)
+	repo := order.NewRepository(pool)
+	draft := orderDraft(uuid.NewString())
+
+	const attempts = 8
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		ids     []uuid.UUID
+		created int
+		errs    []error
+	)
+
+	wg.Add(attempts)
+
+	for range attempts {
+		go func() {
+			defer wg.Done()
+
+			got, isNew, err := repo.Create(ctx, draft)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				errs = append(errs, err)
+
+				return
+			}
+
+			ids = append(ids, got.ID)
+
+			if isNew {
+				created++
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	require.Empty(t, errs, "параллельный ретрай не должен падать ошибкой")
+	require.Len(t, ids, attempts)
+	assert.Equal(t, 1, created, "заказ создаётся ровно один раз")
+
+	for _, id := range ids {
+		assert.Equal(t, ids[0], id, "все запросы обязаны вернуть один и тот же заказ")
+	}
+
+	var stored int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM orders WHERE user_id = $1 AND idempotency_key = $2`,
+		draft.UserID, draft.IdempotencyKey).Scan(&stored))
+	assert.Equal(t, 1, stored)
+}
+
+// Поллинг-фолбэк заведения спрашивает «что изменилось с прошлого раза»:
+// без этого фильтра POS на каждом тике перечитывал бы всю ленту (сценарий M6).
+func TestOrderListFiltersByUpdatedSince(t *testing.T) {
+	ctx := testContext(t)
+	repo := order.NewRepository(pool)
+
+	created, _, err := repo.Create(ctx, orderDraft(uuid.NewString()))
+	require.NoError(t, err)
+
+	// Отсечки берём из базы, а не с часов хоста: они расходятся на доли
+	// миллисекунды, и заказ, изменённый сразу после отсечки, оказывался бы
+	// то внутри окна, то снаружи.
+	future := databaseNow(t).Add(time.Hour)
+
+	nothing, err := repo.ListByVenue(ctx, demoVenue, order.Filter{
+		UpdatedSince: &future, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, nothing, "заказов, изменённых позже, чем через час, быть не может")
+
+	past := databaseNow(t).Add(-time.Hour)
+
+	page, err := repo.ListByVenue(ctx, demoVenue, order.Filter{
+		UpdatedSince: &past, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, ids(page), created.ID)
+
+	// Переход двигает updated_at, поэтому заказ снова попадает в окно.
+	marker := databaseNow(t)
+
+	_, err = repo.ApplyStatus(ctx, order.Transition{
+		OrderID: created.ID, To: order.StatusPlaced, Actor: order.ActorSystem,
+	})
+	require.NoError(t, err)
+
+	changed, err := repo.ListByVenue(ctx, demoVenue, order.Filter{
+		UpdatedSince: &marker, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, ids(changed), created.ID, "изменённый заказ обязан попасть в выборку")
+}
+
+// databaseNow отдаёт время глазами Postgres: сравнивать его отметки
+// с часами хоста нельзя, они расходятся.
+func databaseNow(t *testing.T) time.Time {
+	t.Helper()
+
+	var now time.Time
+	require.NoError(t, pool.QueryRow(testContext(t), `SELECT now()`).Scan(&now))
+
+	return now
+}
+
+// Гонка не должна прятать ошибку клиента: если два одновременных запроса
+// с одним ключом несут разные тела, второй обязан получить 409, а не чужой
+// заказ. Проверка отпечатка до коммита соседа тут не срабатывает — оба
+// запроса проходят её, пока ни один ещё не записан.
+func TestOrderCreateConflictSurvivesConcurrentDifferentBody(t *testing.T) {
+	ctx := testContext(t)
+	repo := order.NewRepository(pool)
+
+	key := uuid.NewString()
+
+	first := orderDraft(key)
+	first.Fingerprint = "отпечаток-первого"
+	first.DeliveryAddress = "Москва, Пятницкая улица, 20"
+
+	second := orderDraft(key)
+	second.Fingerprint = "отпечаток-второго"
+	second.DeliveryAddress = "Москва, другой адрес"
+
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		succeeded []order.Order
+		conflicts int
+		other     []error
+	)
+
+	wg.Add(2)
+
+	for _, draft := range []order.Draft{first, second} {
+		go func() {
+			defer wg.Done()
+
+			got, _, err := repo.Create(ctx, draft)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				succeeded = append(succeeded, got)
+			case errors.Is(err, order.ErrIdempotencyConflict):
+				conflicts++
+			default:
+				other = append(other, err)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	require.Empty(t, other, "других ошибок быть не должно")
+
+	var stored int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM orders WHERE user_id = $1 AND idempotency_key = $2`,
+		first.UserID, key).Scan(&stored))
+	assert.Equal(t, 1, stored, "заказ по ключу всегда один")
+
+	// Гонка могла разрешиться и последовательно — тогда второй запрос
+	// упёрся в проверку отпечатка ещё до вставки. Важно одно: чужое тело
+	// никогда не получает чужой заказ.
+	require.Len(t, succeeded, 1, "успешным может быть только один запрос")
+	assert.Equal(t, 1, conflicts, "второй обязан получить конфликт ключа")
 }

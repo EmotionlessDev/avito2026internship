@@ -11,7 +11,9 @@ import (
 	"github.com/emotionlessdev/avito-kitchen/internal/outbox"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -69,41 +71,30 @@ func (r *Repository) Create(ctx context.Context, draft Draft) (Order, bool, erro
 		orderID uuid.UUID
 	)
 
-	err := r.inTx(ctx, func(tx pgx.Tx) error {
-		existing, found, err := findByIdempotencyKey(ctx, tx, draft.UserID, draft.IdempotencyKey)
-		if err != nil {
-			return err
+	err := r.createOnce(ctx, draft, &created, &orderID)
+
+	// Проверка ключа и вставка — это check-then-act: между ними успевает
+	// вклиниться параллельный запрос с тем же ключом, и уникальный индекс
+	// ловит его на INSERT. Перечитываем заказ, который успел создать сосед.
+	if isDuplicateIdempotencyKey(err) {
+		existing, found, lookupErr := r.ByIdempotencyKey(ctx, draft.UserID, draft.IdempotencyKey)
+		if lookupErr != nil {
+			return Order{}, false, lookupErr
 		}
 
 		if found {
-			orderID = existing
+			// Отпечаток сравнивается и здесь, а не только в сервисе: в гонке
+			// оба запроса проходят его проверку до коммита соседа, и без
+			// повторного сравнения запрос с другим адресом получил бы 200
+			// и чужой заказ вместо 409.
+			if existing.Fingerprint != draft.Fingerprint {
+				return Order{}, false, ErrIdempotencyConflict
+			}
 
-			return nil
+			return existing, false, nil
 		}
+	}
 
-		var number string
-
-		orderID, number, err = insertOrder(ctx, tx, draft)
-		if err != nil {
-			return err
-		}
-
-		if err := insertItems(ctx, tx, orderID, draft.Items); err != nil {
-			return err
-		}
-
-		if err := insertStatusChange(ctx, tx, orderID, nil, StatusCreated, ActorSystem, nil); err != nil {
-			return err
-		}
-
-		if err := writeCreatedEvent(ctx, tx, draft, orderID, number); err != nil {
-			return err
-		}
-
-		created = true
-
-		return nil
-	})
 	if err != nil {
 		return Order{}, false, err
 	}
@@ -114,6 +105,61 @@ func (r *Repository) Create(ctx context.Context, draft Draft) (Order, bool, erro
 	}
 
 	return order, created, nil
+}
+
+// createOnce — сама транзакция оформления. Вынесена, чтобы гонку по ключу
+// идемпотентности можно было обработать снаружи, не разворачивая транзакцию.
+func (r *Repository) createOnce(
+	ctx context.Context, draft Draft, created *bool, orderID *uuid.UUID,
+) error {
+	return r.inTx(ctx, func(tx pgx.Tx) error {
+		existing, found, err := findByIdempotencyKey(ctx, tx, draft.UserID, draft.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+
+		if found {
+			*orderID = existing
+
+			return nil
+		}
+
+		var number string
+
+		*orderID, number, err = insertOrder(ctx, tx, draft)
+		if err != nil {
+			return err
+		}
+
+		if err := insertItems(ctx, tx, *orderID, draft.Items); err != nil {
+			return err
+		}
+
+		if err := insertStatusChange(ctx, tx, *orderID, nil, StatusCreated, ActorSystem, nil); err != nil {
+			return err
+		}
+
+		if err := writeCreatedEvent(ctx, tx, draft, *orderID, number); err != nil {
+			return err
+		}
+
+		*created = true
+
+		return nil
+	})
+}
+
+// idempotencyKeyConstraint — уникальный индекс, который защищает от второго
+// заказа по тому же ключу. Имя проверяется явно: другой конфликт уникальности
+// прятать под «это просто ретрай» нельзя.
+const idempotencyKeyConstraint = "orders_user_id_idempotency_key_key"
+
+func isDuplicateIdempotencyKey(err error) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == pgerrcode.UniqueViolation &&
+		pgErr.ConstraintName == idempotencyKeyConstraint
 }
 
 func findByIdempotencyKey(

@@ -189,15 +189,19 @@ func (p *Platform) SetAvailability(
 	return nil
 }
 
-// NewOrders забирает заказы, ожидающие подтверждения.
+// NewOrders забирает заказы, ожидающие подтверждения, изменённые позже since.
 //
 // Это поллинг-фолбэк: если вебхук не дошёл, заказ всё равно попадёт на кухню
-// (сценарий M6).
-func (p *Platform) NewOrders(ctx context.Context) ([]merchant.MerchantOrder, error) {
+// (сценарий M6). Пустой since означает «с начала времён» — так заведение
+// читает ленту после первого запуска и после перезапуска.
+func (p *Platform) NewOrders(
+	ctx context.Context, since *time.Time,
+) ([]merchant.MerchantOrder, error) {
 	status := []merchant.OrderStatus{merchant.Placed}
 
 	response, err := p.client.ListVenueOrdersWithResponse(ctx, &merchant.ListVenueOrdersParams{
 		Status: &status,
+		Since:  since,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("поллинг заказов: %w", err)

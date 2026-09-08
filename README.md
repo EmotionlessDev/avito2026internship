@@ -584,7 +584,7 @@ CJM обеих сторон в виде Mermaid-диаграмм — в диза
 | M5 | Отказ | `reject` с причиной → компенсация холда → уведомление пользователю |
 | M6 | POS недоступен | Retry вебхука + поллинг-фолбэк `GET /orders?status=placed`, идемпотентность по `order_id` |
 | M7 | Пауза приёма | `is_accepting_orders=false` — заведение остаётся в каталоге, но помечено |
-| M8 | Витрина статистики | `GET /venue/stats` — проекция `order-events` в `venue_daily_stats` |
+| M8 | Витрина статистики | `GET /venue/stats?date=` — проекция `order-events` в `venue_daily_stats`, по умолчанию сегодня в поясе заведения |
 
 Каждая «трудность» воспроизводится одной командой — сценарными триггерами POS,
 см. [Пример заведения](#пример-заведения).
@@ -876,7 +876,7 @@ SQL, то есть фильтры мультитенантности, блоки
   ok   internal/cart               82.4%  (257/312)
   ok   internal/catalog            84.2%  (224/266)
   ok   internal/merchant           77.6%  (448/577)
-  ok   internal/order              71.5%  (269/376)
+  ok   internal/order              73.0%  (289/396)
   ok   internal/order/workflow     85.4%  (304/356)
   ok   internal/paging            100.0%  (20/20)
   ok   internal/payments          100.0%  (10/10)
