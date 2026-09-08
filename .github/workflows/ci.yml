@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Ручной запуск нужен, когда чинишь сам workflow: иначе каждую попытку
+  # приходится проверять пушем.
+  workflow_dispatch:
 
 # Версия Go нигде не дублируется: все job'ы берут её из go.mod, потому что
 # проверять проект нужно тем тулчейном, которым он объявлен. Разъехавшаяся
@@ -19,6 +22,7 @@ jobs:
   lint:
     name: Линтеры
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +48,7 @@ jobs:
   test:
     name: Тесты и покрытие
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +80,7 @@ jobs:
   build:
     name: Сборка образов
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -97,6 +103,7 @@ jobs:
   e2e:
     name: Бизнес-сценарии
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -123,6 +130,7 @@ jobs:
   diagrams:
     name: Диаграммы
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
