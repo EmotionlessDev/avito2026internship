@@ -876,7 +876,7 @@ SQL, то есть фильтры мультитенантности, блоки
   ok   internal/cart               82.4%  (257/312)
   ok   internal/catalog            84.2%  (224/266)
   ok   internal/merchant           77.6%  (448/577)
-  ok   internal/order              71.3%  (268/376)
+  ok   internal/order              71.5%  (269/376)
   ok   internal/order/workflow     85.4%  (304/356)
   ok   internal/paging            100.0%  (20/20)
   ok   internal/payments          100.0%  (10/10)

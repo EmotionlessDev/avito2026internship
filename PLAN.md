@@ -327,7 +327,7 @@ flowchart LR
 | Выполняет все бизнес-сценарии | `make demo` — 22 сценария (14 U + 8 M), 111 ассертов на коды и поля | 9 | ✅ |
 | CJM пользователя, code-generated | [`DESIGN.md` §2](docs/DESIGN.md#2-пользовательские-сценарии-cjm-покупателя) — Mermaid `journey` + таблица U1–U14; ссылка из README | 10 | ✅ |
 | CJM заведения, code-generated | [`DESIGN.md` §3](docs/DESIGN.md#3-сценарии-заведения-cjm-заведения) — Mermaid `journey` + `sequenceDiagram`; ссылка из README | 10 | ✅ |
-| Миграции со схемами БД | `migrations/0001..0009`, goose, up + down в каждой | 1, 9 | ✅ |
+| Миграции со схемами БД | `migrations/0001..0010`, goose, up + down в каждой, откат проверяется | 1, 9, 11 | ✅ |
 | OpenAPI-схема | 3 спеки в `api/` + Swagger UI в compose | 2 | ✅ |
 | README: описание проекта | [Раздел «О проекте»](README.md#о-проекте) | 10 | ✅ |
 | README: C4 Level 2/3 | [Раздел «Архитектура»](README.md#архитектура) — C4 L1 + L2 + L3 | 10 | ✅ |
